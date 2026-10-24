@@ -550,6 +550,8 @@ pub trait Store<T> {
     fn take(&mut self) -> T;
 }
 
+// (its std impls: Display below, and derived Debug, PartialEq, Eq, PartialOrd, Ord and Hash)
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Bin {
     held: i32,
 }
@@ -557,6 +559,9 @@ pub struct Bin {
 impl Bin {
     pub fn new() -> Bin {
         Bin { held: 0 }
+    }
+    pub fn with(n: i32) -> Bin {
+        Bin { held: n }
     }
 }
 

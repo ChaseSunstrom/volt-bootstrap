@@ -46,6 +46,15 @@ fn main() -> void {
     std::println("taken {} {}", b.take(), b.convert());
     var w = geom::Words::new("ab");
     std::println("words {}", w.take());
+    // a crate type's std impls: Display ({} and to_string), Debug (debug_string), PartialEq (==),
+    // Ord (cmp) and Hash (hash: a std::map key)
+    val b2 = geom::Bin::with(7);
+    val b3 = geom::Bin::with(9);
+    std::println("traits {} {} {} {} {}", b2, b2.to_string(), b2.debug_string(), b2 == geom::Bin::with(7), b2.cmp(&b3));
+    std::println("hash {}", b2.hash() == geom::Bin::with(7).hash());
+    var keyed: std::map<geom::Bin, i32> = {};
+    keyed.put(geom::Bin::with(1), 10);
+    std::println("keyed {}", *(keyed.get(geom::Bin::with(1)) ?? return));
     // an Err of one of the crate's structs: its fields in the error
     val good = geom::parse_fail("12") catch |e| { return; };
     val bad = geom::parse_fail("x1") catch |e| {
@@ -66,4 +75,7 @@ fn main() -> void {
 // expect: store #700 <bin(7)>
 // expect: taken 7 0
 // expect: words ab
+// expect: traits bin(7) bin(7) Bin { held: 7 } true -1
+// expect: hash true
+// expect: keyed 10
 // expect: parse_fail 12 2 not a number

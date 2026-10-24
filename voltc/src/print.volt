@@ -625,6 +625,25 @@ attach fn print_code(this: checker&, code: std::vec<u32>&, sink: u32, c: u32, t:
                 put(code, this.out_rt(sink, "volt_print_str", s));
                 return;
             }
+            // one that attaches to_string(this: T&) giving a type with as_str prints that text (a
+            // Rust type's Display, through bolt), deleted after
+            val ts = try this.hook(t, "to_string");
+            if (ts) {
+                val rt = this.fi(ts).ret;
+                val sh = try this.hook(rt, "as_str");
+                if (sh) {
+                    this.use_fn(ts);
+                    this.use_fn(sh);
+                    val tmp = this.tmp_local("ts", rt);
+                    put(code, this.ir.decl(tmp.id, this.call_fn(this.fi(ts).ir, nodes(this.ir.addr(c, this.t.ref_to(t))), rt)));
+                    val s = this.call_fn(this.fi(sh).ir, nodes(this.ir.addr(tmp.c, this.t.ref_to(rt))), STR);
+                    put(code, this.out_rt(sink, "volt_print_str", s));
+                    if (try this.needs_drop(rt)) {
+                        put(code, this.call_fn(try this.drop_fn(rt), nodes(this.ir.addr(tmp.c, this.t.ref_to(rt))), VOID));
+                    }
+                    return;
+                }
+            }
             val own = this.owner(t);
             if (own) {
                 val o = own;

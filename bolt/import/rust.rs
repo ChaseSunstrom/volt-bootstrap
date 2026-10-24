@@ -1136,7 +1136,9 @@ impl<'a> Doc<'a> {
             d.variants = plain.then_some(vs);
             self.m.enums.insert(name.clone(), (full, stripped || opaque));
         }
-        // its impls: Clone, and the inherent ones' pub fns as its methods
+        // its impls: Clone, the std traits Volt gives a form (std_tr), and the inherent ones' pub fns
+        // as its methods
+        let mut std_tr: BTreeSet<String> = BTreeSet::new();
         for iid in body.get("impls").map_or(&[][..], Json::arr) {
             let Some(im) = iid.key().and_then(|k| self.idx.get(&k)).and_then(|x| x.get("inner")).and_then(|i| i.get("impl")) else { continue };
             if im.get("blanket_impl").is_some_and(|b| !b.is_null()) || im.get("is_synthetic").and_then(Json::bool) == Some(true) {
@@ -1146,6 +1148,9 @@ impl<'a> Doc<'a> {
                 Some(tr) => {
                     if tr.get("path").and_then(Json::str).is_some_and(|p| p.rsplit("::").next() == Some("Clone")) {
                         d.clone = true;
+                    }
+                    if let Some(last) = tr.get("path").and_then(Json::str).and_then(|p| p.rsplit("::").next()) {
+                        std_tr.insert(last.to_string());
                     }
                 }
                 None => {
@@ -1158,6 +1163,36 @@ impl<'a> Doc<'a> {
                         }
                     }
                 }
+            }
+        }
+        // a method each for its std impls, unless one of its own has the name: Display's to_string
+        // (and {} prints through it), Debug's debug_string, PartialEq's eq (Volt's ==), Ord's cmp
+        // (std::compare's i32) and Hash's hash (std::map's u64); the last three not for an enum
+        // (Volt's own compare and hash it)
+        let have: BTreeSet<String> = self.m.methods.get(&name).map(|v| v.iter().map(|s| s.name.clone()).collect()).unwrap_or_default();
+        let me = Ty::Ref(Box::new(Ty::Named(name.clone())), false);
+        let mk = |n: &str, call: Option<&str>, params: Vec<(String, Option<Ty>)>, ret: Ty, tr: &str| Sig { name: n.into(), recv: Recv::Ref, params, ret: Some(ret), skip: None, src: format!("{n} (impl {tr} for {name})"), generics: Vec::new(), call: call.map(String::from) };
+        let mut extra = Vec::new();
+        if std_tr.contains("Display") {
+            extra.push(mk("to_string", None, Vec::new(), Ty::String, "std::fmt::Display"));
+        }
+        if std_tr.contains("Debug") {
+            extra.push(mk("debug_string", Some("volt_debug"), Vec::new(), Ty::String, "std::fmt::Debug"));
+        }
+        if !d.is_enum {
+            if std_tr.contains("PartialEq") {
+                extra.push(mk("eq", None, vec![("other".into(), Some(me.clone()))], Ty::Prim("bool"), "PartialEq"));
+            }
+            if std_tr.contains("Ord") {
+                extra.push(mk("cmp", Some("volt_cmp"), vec![("other".into(), Some(me.clone()))], Ty::Prim("i32"), "Ord"));
+            }
+            if std_tr.contains("Hash") {
+                extra.push(mk("hash", Some("volt_hash"), Vec::new(), Ty::Prim("u64"), "std::hash::Hash"));
+            }
+        }
+        for x in extra {
+            if !have.contains(&x.name) {
+                self.m.methods.entry(name.clone()).or_default().push(x);
             }
         }
         self.m.types.push(d);
@@ -2509,7 +2544,7 @@ impl Lang for Rust {
 
     fn prelude(&self, g: &Gen) -> String {
         let free = |what: &str| format!("volt_rust_{}_free_{what}", g.alias);
-        let mut s = String::from("// the glue between a Volt program and this crate, written by bolt import (use rust)\n#![allow(non_snake_case, non_camel_case_types, unused_parens, unused_unsafe, unused_mut, unused_variables, unreachable_patterns, clippy::all)]\nuse std::ffi::c_void;\n\n");
+        let mut s = String::from("// the glue between a Volt program and this crate, written by bolt import (use rust)\n#![allow(non_snake_case, non_camel_case_types, unused_parens, unused_unsafe, unused_mut, unused_variables, unreachable_patterns, dead_code, clippy::all)]\nuse std::ffi::c_void;\n\n");
         s.push_str("// a Volt value the shim owns (a closure Rust keeps): drop frees it\npub struct VoltEnv {\n    env: *mut c_void,\n    drop: Option<unsafe extern \"C\" fn(*mut c_void)>,\n}\nunsafe impl Send for VoltEnv {}\nunsafe impl Sync for VoltEnv {}\nimpl Drop for VoltEnv {\n    fn drop(&mut self) {\n        if let Some(d) = self.drop {\n            unsafe { d(self.env) }\n        }\n    }\n}\n\n");
         s.push_str("#[repr(C)]\npub struct VoltStr {\n    p: *const u8,\n    n: usize,\n}\n#[repr(C)]\npub struct VoltOwnedStr {\n    p: *mut u8,\n    n: usize,\n}\n\n");
         s.push_str("unsafe fn s<'a>(p: *const u8, n: usize) -> &'a str {\n    if n == 0 {\n        return \"\";\n    }\n    let b = std::slice::from_raw_parts(p, n);\n    match std::str::from_utf8(b) {\n        Ok(s) => s,\n        Err(e) => std::str::from_utf8_unchecked(&b[..e.valid_up_to()]),\n    }\n}\n");
@@ -2520,6 +2555,8 @@ impl Lang for Rust {
         s.push_str("unsafe fn put_strs(v: Vec<String>, p: *mut *mut VoltOwnedStr, n: *mut usize) {\n    let xs: Vec<VoltOwnedStr> = v.into_iter().map(|x| { let mut q = std::ptr::null_mut(); let mut m = 0; put_str(x, &mut q, &mut m); VoltOwnedStr { p: q, n: m } }).collect();\n    put_vec(xs, p, n);\n}\n\n");
         // an error's text: Display, else Debug, else its type's name (autoref picks the first
         // its type has)
+        // a type's Ord, Hash and Debug as the Volt forms its methods give (an i32, a u64, a String)
+        s.push_str("trait VoltStd {\n    fn volt_cmp(&self, o: &Self) -> i32\n    where\n        Self: Ord,\n    {\n        self.cmp(o) as i32\n    }\n    fn volt_hash(&self) -> u64\n    where\n        Self: std::hash::Hash,\n    {\n        use std::hash::Hasher;\n        let mut h = std::collections::hash_map::DefaultHasher::new();\n        self.hash(&mut h);\n        h.finish()\n    }\n    fn volt_debug(&self) -> String\n    where\n        Self: std::fmt::Debug,\n    {\n        format!(\"{:?}\", self)\n    }\n}\nimpl<T: ?Sized> VoltStd for T {}\n\n");
         s.push_str("struct Msg<'a, T>(&'a T);\ntrait ByDisplay {\n    fn text(&self) -> String;\n}\nimpl<T: std::fmt::Display> ByDisplay for &&Msg<'_, T> {\n    fn text(&self) -> String {\n        self.0.to_string()\n    }\n}\ntrait ByDebug {\n    fn text(&self) -> String;\n}\nimpl<T: std::fmt::Debug> ByDebug for &Msg<'_, T> {\n    fn text(&self) -> String {\n        format!(\"{:?}\", self.0)\n    }\n}\ntrait ByName {\n    fn text(&self) -> String;\n}\nimpl<T> ByName for Msg<'_, T> {\n    fn text(&self) -> String {\n        std::any::type_name::<T>().to_string()\n    }\n}\n\n");
         // a panic's message; a try_ form's call turns the panic hook's report off
         s.push_str("fn panic_text(p: Box<dyn std::any::Any + Send>) -> String {\n    if let Some(s) = p.downcast_ref::<&str>() {\n        s.to_string()\n    } else if let Some(s) = p.downcast_ref::<String>() {\n        s.clone()\n    } else {\n        \"a panic\".to_string()\n    }\n}\n\nthread_local! {\n    static QUIET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };\n}\n\n");
