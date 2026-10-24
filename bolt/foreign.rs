@@ -195,36 +195,44 @@ impl Cur<'_> {
 /// a C API read from source: declarations in order, and what was left out
 #[derive(Default)]
 struct Api {
-    structs: Vec<(String, Vec<(String, String)>)>, // name, (field, C type)
-    enums: Vec<(String, String, Vec<(String, i128)>)>, // name, C tag type, (variant, value)
-    fns: Vec<String>,                               // C prototypes
+    enums: Vec<(String, String, Vec<(String, i128)>, String)>, // name, C tag type, (variant, value), the constants' prefix
+    aliases: Vec<(String, String)>,                    // a transparent type: name, its field's C type
+    typedefs: Vec<String>,                             // typedef struct N N; and the like, in order
+    bodies: Vec<String>,                               // their definitions, in source order
+    fns: Vec<String>,                                  // C prototypes
     left_out: Vec<String>,
-    known: BTreeSet<String>, // struct and enum names, which C types can name
+    known: BTreeSet<String>, // struct, union and enum names, which C types can name
+}
+
+/// fields as C declares them, each on its own line at this indent
+fn fields_text(fs: &[(String, String)], indent: &str) -> String {
+    fs.iter().map(|(f, t)| format!("{indent}{};\n", declare(t, f))).collect()
 }
 
 impl Api {
     fn header(&self, name: &str, what: &str) -> String {
         let guard = format!("VOLT_FOREIGN_{}_H", name.to_uppercase());
         let mut out = format!("// {name}: the C API of {what}, written by bolt from its source\n#ifndef {guard}\n#define {guard}\n#include <stdbool.h>\n#include <stddef.h>\n#include <stdint.h>\n");
-        for (n, tag, vs) in &self.enums {
+        for (n, tag, vs, pre) in &self.enums {
             out.push_str(&format!("\ntypedef {tag} {n};\nenum {{\n"));
             for (v, x) in vs {
-                out.push_str(&format!("    {n}_{v} = {x},\n"));
+                out.push_str(&format!("    {pre}_{v} = {x},\n"));
             }
             out.push_str("};\n");
         }
-        for (n, _) in &self.structs {
-            out.push_str(&format!("\ntypedef struct {n} {n};"));
+        for t in &self.typedefs {
+            out.push('\n');
+            out.push_str(t);
         }
-        if !self.structs.is_empty() {
+        if !self.typedefs.is_empty() {
             out.push('\n');
         }
-        for (n, fs) in &self.structs {
-            out.push_str(&format!("\nstruct {n} {{\n"));
-            for (f, t) in fs {
-                out.push_str(&format!("    {};\n", declare(t, f)));
-            }
-            out.push_str("};\n");
+        for (n, t) in &self.aliases {
+            out.push_str(&format!("\ntypedef {};\n", declare(t, n)));
+        }
+        for b in &self.bodies {
+            out.push('\n');
+            out.push_str(b);
         }
         if !self.fns.is_empty() {
             out.push('\n');
@@ -364,6 +372,60 @@ fn rust_ty_at(api: &Api, c: &mut Cur) -> Option<String> {
     api.known.contains(&name).then_some(name)
 }
 
+/// a field's type: rust_ty's, and an array [T; N] (int32_t[3][2] for [[i32; 2]; 3])
+fn rust_field_ty(api: &Api, t: &[Tok]) -> Option<String> {
+    if !matches!(t.first(), Some(Tok::P(p)) if p == "[") || !matches!(t.last(), Some(Tok::P(p)) if p == "]") {
+        return rust_ty(api, t);
+    }
+    let mut depth = 0;
+    let mut semi = None;
+    for (i, x) in t.iter().enumerate().take(t.len() - 1).skip(1) {
+        match x {
+            Tok::P(p) if p == "[" || p == "(" || p == "<" => depth += 1,
+            Tok::P(p) if p == "]" || p == ")" || p == ">" => depth -= 1,
+            Tok::P(p) if p == ";" && depth == 0 => {
+                semi = Some(i);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let semi = semi?;
+    let n = int_value(&t[semi + 1..t.len() - 1])?;
+    let inner = rust_field_ty(api, &t[1..semi])?;
+    let at = inner.find('[').unwrap_or(inner.len());
+    Some(format!("{}[{n}]{}", &inner[..at], &inner[at..]))
+}
+
+/// a struct's, union's or variant's fields from its braces or parentheses (a tuple's are _0, _1..),
+/// or why one can't be declared
+fn rust_fields(api: &Api, group: &[Vec<Tok>], tuple: bool) -> Result<Vec<(String, String)>, String> {
+    let mut fields = Vec::new();
+    for f in group {
+        let f: Vec<Tok> = f.iter().skip_while(|t| matches!(t, Tok::P(p) if p == "#")).cloned().collect();
+        let (fname, ty) = if tuple {
+            // (pub T, pub(crate) U)
+            let mut k = 0;
+            if matches!(f.first(), Some(Tok::Id(w)) if w == "pub") {
+                k = 1;
+                if matches!(f.get(1), Some(Tok::P(p)) if p == "(") {
+                    k = f.iter().position(|t| *t == Tok::P(")".into())).map_or(1, |e| e + 1);
+                }
+            }
+            (format!("_{}", fields.len()), f[k..].to_vec())
+        } else {
+            let Some(colon) = f.iter().position(|t| *t == Tok::P(":".into())) else { continue };
+            let Some(Tok::Id(fname)) = f.get(colon - 1) else { continue };
+            (fname.clone(), f[colon + 1..].to_vec())
+        };
+        match rust_field_ty(api, &ty) {
+            Some(t) => fields.push((fname, t)),
+            None => return Err(format!("field {fname}'s type")),
+        }
+    }
+    Ok(fields)
+}
+
 /// extern "C" fn(A, B) -> R, after the extern "C": a C function pointer type, "R (*)(A, B)"
 fn rust_fn_ptr(api: &Api, c: &mut Cur) -> Option<String> {
     if !c.eat("fn") || !c.is("(") {
@@ -391,8 +453,8 @@ fn rust_api(files: &[String]) -> Api {
     // the names first: a fn may use a struct declared after it
     for t in &toks {
         for_items(t, &mut |attrs, item| {
-            if (has_attr(attrs, "repr", "C") || repr_int(attrs).is_some()) && item.len() > 2 {
-                if let Some(n) = item_name(item, &["struct", "enum"]) {
+            if (has_attr(attrs, "repr", "C") || repr_int(attrs).is_some() || has_attr(attrs, "repr", "transparent")) && item.len() > 2 {
+                if let Some(n) = item_name(item, &["struct", "enum", "union"]) {
                     api.known.insert(n);
                 }
             }
@@ -559,28 +621,87 @@ fn rust_item(api: &mut Api, attrs: &[Vec<Tok>], item: &[Tok]) {
         };
         let ps = if ps.is_empty() { "void".to_string() } else { ps.join(", ") };
         api.fns.push(format!("{}({ps})", declare(&ret, &name)));
-    } else if words.contains(&"struct") && is_pub && has_attr(attrs, "repr", "C") {
-        let Some(name) = item_name(item, &["struct"]) else { return };
-        let Some(open) = item.iter().position(|t| *t == Tok::P("{".into())) else {
-            api.left_out.push(format!("struct {name} (a tuple or unit struct)"));
+    } else if (words.contains(&"struct") || words.contains(&"union")) && is_pub && (has_attr(attrs, "repr", "C") || has_attr(attrs, "repr", "transparent")) {
+        let union = words.contains(&"union");
+        let Some(name) = item_name(item, &["struct", "union"]) else { return };
+        let kind = if union { "union" } else { "struct" };
+        // its fields from its braces, or a tuple struct's parentheses; a unit struct has none:
+        // incomplete (C has no empty struct), which a pointer to it takes
+        let after = item.iter().position(|t| matches!(t, Tok::Id(w) if *w == name)).map_or(0, |k| k + 1);
+        let open = item[after..].iter().position(|t| *t == Tok::P("{".into()) || *t == Tok::P("(".into())).map(|k| k + after);
+        let Some(open) = open else {
+            api.typedefs.push(format!("typedef struct {name} {name};"));
             return;
         };
+        let tuple = item[open] == Tok::P("(".into());
         let mut c = Cur { t: item, i: open };
-        let mut fields = Vec::new();
-        for f in c.group_items() {
-            let f: Vec<Tok> = f.into_iter().skip_while(|t| matches!(t, Tok::P(p) if p == "#")).collect();
-            let Some(colon) = f.iter().position(|t| *t == Tok::P(":".into())) else { continue };
-            let Some(Tok::Id(fname)) = f.get(colon - 1) else { continue };
-            match rust_ty(api, &f[colon + 1..]) {
-                Some(t) => fields.push((fname.clone(), t)),
-                None => {
-                    api.left_out.push(format!("struct {name} (field {fname}'s type)"));
+        let fields = match rust_fields(api, &c.group_items(), tuple) {
+            Ok(f) => f,
+            Err(why) => {
+                api.left_out.push(format!("{kind} {name} ({why})"));
+                api.known.remove(&name);
+                return;
+            }
+        };
+        if has_attr(attrs, "repr", "transparent") {
+            // its one field's type, which it has the layout of
+            match fields.as_slice() {
+                [(_, t)] => api.aliases.push((name, t.clone())),
+                _ => {
+                    api.left_out.push(format!("struct {name} (transparent with no single field)"));
+                    api.known.remove(&name);
+                }
+            }
+            return;
+        }
+        api.typedefs.push(format!("typedef {kind} {name} {name};"));
+        api.bodies.push(format!("{kind} {name} {{\n{}}};\n", fields_text(&fields, "    ")));
+    } else if words.contains(&"enum") && is_pub && item.iter().any(|t| *t == Tok::P("{".into())) && enum_has_data(item) {
+        // with data, as RFC 2195 lays it out: repr(C) (a tag of its own type, then a union of each
+        // variant's fields), or a primitive repr alone (a union of structs each starting with it)
+        let Some(name) = item_name(item, &["enum"]) else { return };
+        let wrapped = has_attr(attrs, "repr", "C");
+        let Some(tag) = repr_int(attrs).or(wrapped.then_some("int")) else { return };
+        let Some(open) = item.iter().position(|t| *t == Tok::P("{".into())) else { return };
+        let mut c = Cur { t: item, i: open };
+        let mut tags = Vec::new();
+        let mut arms = String::new();
+        let mut next: i128 = 0;
+        let tn = format!("{name}_Tag");
+        for v in c.group_items() {
+            let Some(vk) = v.iter().position(|t| matches!(t, Tok::Id(_))) else { continue };
+            let Tok::Id(vn) = &v[vk] else { continue };
+            if let Some(eq) = v.iter().position(|t| *t == Tok::P("=".into())) {
+                next = int_value(&v[eq + 1..]).unwrap_or(next);
+            }
+            tags.push((vn.clone(), next));
+            next += 1;
+            let Some(g) = v.iter().position(|t| *t == Tok::P("(".into()) || *t == Tok::P("{".into())) else { continue };
+            let tuple = v[g] == Tok::P("(".into());
+            let mut vc = Cur { t: &v, i: g };
+            let fields = match rust_fields(api, &vc.group_items(), tuple) {
+                Ok(f) => f,
+                Err(why) => {
+                    api.left_out.push(format!("enum {name} (variant {vn}'s {why})"));
                     api.known.remove(&name);
                     return;
                 }
+            };
+            if wrapped {
+                arms.push_str(&format!("        struct {{\n{}        }} {vn};\n", fields_text(&fields, "            ")));
+            } else {
+                arms.push_str(&format!("    struct {{\n        {tn} tag;\n{}    }} {vn};\n", fields_text(&fields, "        ")));
             }
         }
-        api.structs.push((name, fields));
+        // (the tag's constants are Name_Variant, as a field-less enum's)
+        api.enums.push((tn.clone(), tag.to_string(), tags, name.clone()));
+        if wrapped {
+            api.typedefs.push(format!("typedef struct {name} {name};"));
+            api.bodies.push(format!("struct {name} {{\n    {tn} tag;\n    union {{\n{arms}    }};\n}};\n"));
+        } else {
+            api.typedefs.push(format!("typedef union {name} {name};"));
+            api.bodies.push(format!("union {name} {{\n    {tn} tag;\n{arms}}};\n"));
+        }
     } else if words.contains(&"enum") && is_pub {
         let Some(name) = item_name(item, &["enum"]) else { return };
         let tag = repr_int(attrs).or(has_attr(attrs, "repr", "C").then_some("int"));
@@ -602,8 +723,15 @@ fn rust_item(api: &mut Api, attrs: &[Vec<Tok>], item: &[Tok]) {
             vs.push((vn.clone(), next));
             next += 1;
         }
-        api.enums.push((name, tag.to_string(), vs));
+        api.enums.push((name.clone(), tag.to_string(), vs, name));
     }
+}
+
+/// whether an enum item's variants hold data (a variant with parentheses or braces)
+fn enum_has_data(item: &[Tok]) -> bool {
+    let Some(open) = item.iter().position(|t| *t == Tok::P("{".into())) else { return false };
+    let mut c = Cur { t: item, i: open };
+    c.group_items().iter().any(|v| v.iter().any(|t| *t == Tok::P("(".into()) || *t == Tok::P("{".into())))
 }
 
 /// an integer literal, maybe negative (-1, 0x10, 0b11)
@@ -699,6 +827,19 @@ fn zig_ty_at(api: &Api, c: &mut Cur) -> Option<String> {
     api.known.contains(&name).then_some(name)
 }
 
+/// a field's type: zig_ty's, and an array [N]T (int32_t[3][2] for [3][2]i32)
+fn zig_field_ty(api: &Api, t: &[Tok]) -> Option<String> {
+    if let [Tok::P(o), Tok::Num(_), Tok::P(e), rest @ ..] = t {
+        if o == "[" && e == "]" {
+            let n = int_value(&t[1..2])?;
+            let inner = zig_field_ty(api, rest)?;
+            let at = inner.find('[').unwrap_or(inner.len());
+            return Some(format!("{}[{n}]{}", &inner[..at], &inner[at..]));
+        }
+    }
+    zig_ty(api, t)
+}
+
 /// fn (A, B) callconv(.c) R, after the pointer: a C function pointer type
 fn zig_fn_ptr(api: &Api, c: &mut Cur) -> Option<String> {
     if !c.eat("fn") || !c.is("(") {
@@ -735,9 +876,10 @@ fn zig_api(src: &str) -> Api {
     };
     for k in 0..t.len() {
         if let Some((n, at)) = decl(k) {
-            if t.get(at) == Some(&Tok::Id("extern".into())) && t.get(at + 1) == Some(&Tok::Id("struct".into())) {
-                api.known.insert(n);
-            } else if t.get(at) == Some(&Tok::Id("enum".into())) && t.get(at + 1) == Some(&Tok::P("(".into())) {
+            let extern_agg = t.get(at) == Some(&Tok::Id("extern".into())) && (t.get(at + 1) == Some(&Tok::Id("struct".into())) || t.get(at + 1) == Some(&Tok::Id("union".into())));
+            let packed = t.get(at) == Some(&Tok::Id("packed".into())) && t.get(at + 1) == Some(&Tok::Id("struct".into())) && t.get(at + 2) == Some(&Tok::P("(".into()));
+            let opaque = t.get(at) == Some(&Tok::Id("opaque".into()));
+            if extern_agg || packed || opaque || (t.get(at) == Some(&Tok::Id("enum".into())) && t.get(at + 1) == Some(&Tok::P("(".into()))) {
                 api.known.insert(n);
             }
         }
@@ -745,7 +887,31 @@ fn zig_api(src: &str) -> Api {
     let mut k = 0;
     while k < t.len() {
         if let Some((n, at)) = decl(k) {
-            if t.get(at) == Some(&Tok::Id("extern".into())) && t.get(at + 1) == Some(&Tok::Id("struct".into())) {
+            if t.get(at) == Some(&Tok::Id("opaque".into())) {
+                // an opaque type: an incomplete struct, which a pointer takes
+                api.typedefs.push(format!("typedef struct {n} {n};"));
+                let mut c = Cur { t: &t, i: at + 1 };
+                c.skip_group();
+                k = c.i;
+                continue;
+            }
+            if t.get(at) == Some(&Tok::Id("packed".into())) && t.get(at + 1) == Some(&Tok::Id("struct".into())) && t.get(at + 2) == Some(&Tok::P("(".into())) {
+                // packed struct(uN): its backing integer's ABI, a typedef of it
+                let mut c = Cur { t: &t, i: at + 2 };
+                let backing = c.group_items();
+                match backing.first().and_then(|x| zig_ty(&api, x)) {
+                    Some(b) => api.aliases.push((n.clone(), b)),
+                    None => {
+                        api.left_out.push(format!("packed struct {n} (its backing integer)"));
+                        api.known.remove(&n);
+                    }
+                }
+                c.skip_group();
+                k = c.i;
+                continue;
+            }
+            if t.get(at) == Some(&Tok::Id("extern".into())) && (t.get(at + 1) == Some(&Tok::Id("struct".into())) || t.get(at + 1) == Some(&Tok::Id("union".into()))) {
+                let kind = if t.get(at + 1) == Some(&Tok::Id("union".into())) { "union" } else { "struct" };
                 let mut c = Cur { t: &t, i: at + 2 };
                 let mut fields = Vec::new();
                 let mut ok = true;
@@ -754,17 +920,18 @@ fn zig_api(src: &str) -> Api {
                     let Some(Tok::Id(fname)) = f.get(colon - 1) else { continue };
                     // a default value (= ...) isn't part of the type
                     let end = f.iter().position(|x| *x == Tok::P("=".into())).unwrap_or(f.len());
-                    match zig_ty(&api, &f[colon + 1..end]) {
+                    match zig_field_ty(&api, &f[colon + 1..end]) {
                         Some(ty) => fields.push((fname.clone(), ty)),
                         None => {
-                            api.left_out.push(format!("struct {n} (field {fname}'s type)"));
+                            api.left_out.push(format!("{kind} {n} (field {fname}'s type)"));
                             ok = false;
                             break;
                         }
                     }
                 }
                 if ok {
-                    api.structs.push((n, fields));
+                    api.typedefs.push(format!("typedef {kind} {n} {n};"));
+                    api.bodies.push(format!("{kind} {n} {{\n{}}};\n", fields_text(&fields, "    ")));
                 } else {
                     api.known.remove(&n);
                 }
@@ -788,7 +955,7 @@ fn zig_api(src: &str) -> Api {
                     vs.push((vn.clone(), next));
                     next += 1;
                 }
-                api.enums.push((n, tag, vs));
+                api.enums.push((n.clone(), tag, vs, n));
                 k = c.i;
                 continue;
             }
@@ -899,6 +1066,55 @@ impl Point { pub fn len(&self) -> f64 { 0.0 } }
     }
 
     #[test]
+    fn rust_repr_c() {
+        // every #[repr(C)] type: a tuple and a unit struct, a union, enums with data (RFC 2195's
+        // two layouts), a transparent struct, array fields; the header compiles as C
+        let src = r#"
+#[repr(C)]
+pub struct Pair(pub i32, pub f32);
+#[repr(C)]
+pub struct Unit;
+#[repr(C)]
+pub union Bits { pub i: u32, pub f: f32 }
+#[repr(C)]
+pub struct Buf { pub data: [u8; 16], pub grid: [[i32; 2]; 3], pub n: usize }
+#[repr(transparent)]
+pub struct Meters(pub f64);
+#[repr(C)]
+pub enum Shape { Circle(f64), Rect { w: f32, h: f32 }, Empty }
+#[repr(u8)]
+pub enum Op { Push(i32), Pop, Swap { a: u8, b: u8 } }
+#[no_mangle]
+pub extern "C" fn area(s: Shape, p: *const Pair, u: *mut Unit, b: Bits, m: Meters) -> f64 { 0.0 }
+#[no_mangle]
+pub extern "C" fn run(o: Op, buf: *const Buf) {}
+"#;
+        let h = rust_api(&[src.to_string()]).header("rc", "x");
+        for want in [
+            "struct Pair {\n    int32_t _0;\n    float _1;\n};",
+            "typedef struct Unit Unit;",
+            "union Bits {\n    uint32_t i;\n    float f;\n};",
+            "struct Buf {\n    uint8_t data[16];\n    int32_t grid[3][2];\n    size_t n;\n};",
+            "typedef double Meters;",
+            "    Shape_Circle = 0,\n    Shape_Rect = 1,\n    Shape_Empty = 2,",
+            "struct Shape {\n    Shape_Tag tag;\n    union {\n        struct {\n            double _0;\n        } Circle;\n        struct {\n            float w;\n            float h;\n        } Rect;\n    };\n};",
+            "union Op {\n    Op_Tag tag;\n    struct {\n        Op_Tag tag;\n        int32_t _0;\n    } Push;\n    struct {\n        Op_Tag tag;\n        uint8_t a;\n        uint8_t b;\n    } Swap;\n};",
+            "double area(Shape s, const Pair *p, Unit *u, Bits b, Meters m);",
+            "void run(Op o, const Buf *buf);",
+        ] {
+            assert!(h.contains(want), "missing {want:?} in\n{h}");
+        }
+        assert!(!h.contains("left out"), "{h}");
+        let dir = std::env::temp_dir().join(format!("bolt-rc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("rc.h");
+        std::fs::write(&file, &h).unwrap();
+        let o = std::process::Command::new("cc").args(["-fsyntax-only", "-std=c11", "-Wall", "-Werror", "-x", "c"]).arg(&file).output().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(o.status.success(), "the header doesn't compile:\n{}\n{h}", String::from_utf8_lossy(&o.stderr));
+    }
+
+    #[test]
     fn zig() {
         let src = r#"
 const std = @import("std");
@@ -925,6 +1141,37 @@ fn private(x: i32) i32 { return x; }
             assert!(h.contains(want), "missing {want:?} in\n{h}");
         }
         assert!(!h.contains("private"), "{h}");
+    }
+
+    #[test]
+    fn zig_extern() {
+        // every extern type: an extern union, an opaque, a packed struct with a backing integer,
+        // array fields; the header compiles as C
+        let src = r#"
+pub const Bits = extern union { i: u32, f: f32 };
+pub const Handle = opaque {};
+pub const Flags = packed struct(u8) { a: bool, b: bool, rest: u6 };
+pub const Buf = extern struct { data: [16]u8, grid: [3][2]i32, n: usize };
+export fn zg_use(b: Bits, h: *Handle, f: Flags, buf: *const Buf) void { _ = b; _ = h; _ = f; _ = buf; }
+"#;
+        let h = zig_api(src).header("ze", "x");
+        for want in [
+            "union Bits {\n    uint32_t i;\n    float f;\n};",
+            "typedef struct Handle Handle;",
+            "typedef uint8_t Flags;",
+            "struct Buf {\n    uint8_t data[16];\n    int32_t grid[3][2];\n    size_t n;\n};",
+            "void zg_use(Bits b, Handle *h, Flags f, const Buf *buf);",
+        ] {
+            assert!(h.contains(want), "missing {want:?} in\n{h}");
+        }
+        assert!(!h.contains("left out"), "{h}");
+        let dir = std::env::temp_dir().join(format!("bolt-ze-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("ze.h");
+        std::fs::write(&file, &h).unwrap();
+        let o = std::process::Command::new("cc").args(["-fsyntax-only", "-std=c11", "-Wall", "-Werror", "-x", "c"]).arg(&file).output().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(o.status.success(), "the header doesn't compile:\n{}\n{h}", String::from_utf8_lossy(&o.stderr));
     }
 }
 

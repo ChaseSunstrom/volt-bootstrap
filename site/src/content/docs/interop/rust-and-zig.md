@@ -367,8 +367,11 @@ What goes into the header:
 | | Rust | Zig |
 | --- | --- | --- |
 | functions | `#[no_mangle] pub extern "C" fn` (or `#[unsafe(no_mangle)]`) | `export fn` |
-| structs | `#[repr(C)]` with named fields | `extern struct` |
+| structs | `#[repr(C)]` with named fields, a tuple struct (its fields `_0`, `_1`…) and a unit struct (an incomplete `struct`, which a pointer takes); `#[repr(transparent)]`, a `typedef` of its field's type | `extern struct`; `opaque {}` (an incomplete `struct`); `packed struct(u8)` and the like, a `typedef` of its backing integer |
+| unions | `#[repr(C)] pub union` | `extern union` |
 | enums | `#[repr(C)]` or `#[repr(i32)]` and the like, without fields | `enum(T)` |
+| enums with data | as RFC 2195 lays them out: `#[repr(C)]` (`#[repr(C, u8)]`) a struct of the tag (`Name_Tag`, its constants `Name_Variant`) and a union of each variant's fields, a struct named for the variant (a tuple variant's `_0`…); `#[repr(u8)]` and the like alone, a union of the tag and a struct per variant starting with it | |
+| arrays | a field's `[T; N]` (`[[i32; 2]; 3]` is `int32_t f[3][2]`) | a field's `[N]T` (`[3][2]i32` the same) |
 | numbers | `i8`…`u64`, `isize`, `usize`, `f32`, `f64`, `bool`, `c_int` and the other `c_` types | the same names |
 | pointers | `*const T`, `*mut T`, `&T`, `&mut T`, `Option<&T>`, `NonNull<T>` | `*T`, `[*]T`, `[*c]T`, `?*T` |
 | function pointers | `extern "C" fn(A) -> R`, in an `Option` for a nullable one | `*const fn (A) callconv(.c) R` |
