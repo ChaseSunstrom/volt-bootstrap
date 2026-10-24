@@ -1647,6 +1647,13 @@ fn cc_run(inputs: std::vec<str>&, out: str, c: cli&, object: bool) -> void {
         // (Ubuntu's gcc links --as-needed, which drops a library named before anything uses it)
         var needed: std::vec<str> = {};
         var archives: std::vec<str> = {};
+        // a shared library: a symbol nothing defines is refused here too, as macOS's and Windows'
+        // linkers refuse it (Linux's would leave it for load time); before the package's flags, so
+        // a plugin whose host provides some (a Node addon's napi_*) lifts it with -Wl,-z,undefs, as
+        // it does macOS's with -Wl,-undefined,dynamic_lookup
+        if (c.shared && std::process::os() == "linux") {
+            put(&argv, "-Wl,--no-undefined");
+        }
         for (a&) in c.cc_args.items() {
             if (a.starts_with("-l")) {
                 put(&needed, *a);
@@ -1698,11 +1705,6 @@ fn cc_run(inputs: std::vec<str>&, out: str, c: cli&, object: bool) -> void {
         }
         if (c.shared) {
             put(&argv, "-shared");
-            // a symbol nothing defines is refused here too, as macOS's and Windows' linkers refuse
-            // it (Linux's would leave it for load time)
-            if (std::process::os() == "linux") {
-                put(&argv, "-Wl,--no-undefined");
-            }
             // and its import library beside it (NAME.lib), which MSVC's link.exe needs to link
             // against the DLL (MinGW's links the DLL itself)
             if (std::process::os() == "windows" && ends_with(out, ".dll")) {

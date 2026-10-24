@@ -1,6 +1,6 @@
 // node's build file: where Node-API's headers are (node_api.h), from the node on PATH, else the
 // usual system places. An addon is a shared library whose napi_* symbols node itself provides, so
-// nothing is linked; macOS needs to be told that.
+// nothing is linked; macOS and Linux need to be told that.
 use std::io;
 
 // the include directory next to the node on PATH, or null
@@ -21,6 +21,8 @@ fn main() -> void {
             bolt::cc_arg(std::fmt::format("-I{}", d.as_str()).as_str());
             if (@cfg("os", "macos")) {
                 bolt::cc_arg("-Wl,-undefined,dynamic_lookup");
+            } else if (@cfg("os", "linux")) {
+                bolt::cc_arg("-Wl,-z,undefs"); // (voltc refuses undefined symbols in a shared library)
             }
             return;
         }
