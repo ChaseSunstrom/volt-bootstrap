@@ -543,6 +543,81 @@ impl Named for Countdown {
 
 impl Greeter for Countdown {}
 
+// a generic trait whose methods take its parameter's values (Store<i32>), one with a generic
+// supertrait (Labeled: Convert<i32>), and one with a std supertrait that has methods (Shown: Display)
+pub trait Store<T> {
+    fn put(&mut self, v: T);
+    fn take(&mut self) -> T;
+}
+
+pub struct Bin {
+    held: i32,
+}
+
+impl Bin {
+    pub fn new() -> Bin {
+        Bin { held: 0 }
+    }
+}
+
+impl Store<i32> for Bin {
+    fn put(&mut self, v: i32) {
+        self.held += v;
+    }
+    fn take(&mut self) -> i32 {
+        std::mem::take(&mut self.held)
+    }
+}
+
+impl Convert<i32> for Bin {
+    fn convert(&self) -> i32 {
+        self.held * 100
+    }
+}
+
+pub trait Labeled: Convert<i32> {
+    fn label_n(&self) -> String {
+        format!("#{}", self.convert())
+    }
+}
+
+impl Labeled for Bin {}
+
+impl std::fmt::Display for Bin {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "bin({})", self.held)
+    }
+}
+
+pub trait Shown: std::fmt::Display {
+    fn shown(&self) -> String {
+        format!("<{}>", self)
+    }
+}
+
+impl Shown for Bin {}
+
+// a text instance (Store<String>): its put takes the text as Volt's str, not the trait's T, so it's
+// left out there; take gives a std::string
+pub struct Words {
+    all: String,
+}
+
+impl Words {
+    pub fn new(s: &str) -> Words {
+        Words { all: s.to_string() }
+    }
+}
+
+impl Store<String> for Words {
+    fn put(&mut self, v: String) {
+        self.all.push_str(&v);
+    }
+    fn take(&mut self) -> String {
+        std::mem::take(&mut self.all)
+    }
+}
+
 // an associated const: Countdown::CAP() (one named like an item of its module is left out)
 pub trait Limited {
     const CAP: u32;

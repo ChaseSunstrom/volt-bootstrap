@@ -37,6 +37,15 @@ fn main() -> void {
     std::println("super {} {}", e.greet(), e.name());
     std::println("const {} {}", geom::Countdown::CAP(), e.used());
     std::println("macro {}", geom::made_by_macro());
+    // a generic trait taking its parameter's values (Store<i32>), a generic supertrait (Labeled:
+    // Convert<i32>) and a std one with methods (Shown: Display)
+    var b = geom::Bin::new();
+    b.put(5);
+    b.put(2);
+    std::println("store {} {}", b.label_n(), b.shown());
+    std::println("taken {} {}", b.take(), b.convert());
+    var w = geom::Words::new("ab");
+    std::println("words {}", w.take());
 }
 // expect: tuple 1.5 3 -2 9 #7 8
 // expect: array 3 2 1
@@ -46,3 +55,6 @@ fn main() -> void {
 // expect: super hello from countdown countdown
 // expect: const 10 5
 // expect: macro 7
+// expect: store #700 <bin(7)>
+// expect: taken 7 0
+// expect: words ab

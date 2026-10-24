@@ -615,9 +615,25 @@ impl<'a> Doc<'a> {
         let map: BTreeMap<String, Ty> = td.params.iter().cloned().zip(args.iter().cloned()).collect();
         let gargs = if gps.is_empty() { String::new() } else { format!("<{}>", args[..gps.len()].iter().map(|a| rust_ty(a, &self.lib, types)).collect::<Vec<_>>().join(", ")) };
         let tpath = self.trait_rust_path(&td);
+        // (a method taking a type parameter's value where this instance's argument is text: Volt's
+        // trait spells T, the instance's parameter a str, so this instance leaves it out: it's
+        // optional in the trait, trait_decl_foreign)
+        let text: BTreeSet<&String> = td.params.iter().zip(args.iter()).filter(|(_, a)| matches!(a, Ty::String | Ty::Str)).map(|(p, _)| p).collect();
+        let mut gone = Vec::new();
         let methods = td
             .methods
             .iter()
+            .filter(|(s, _)| {
+                let mut g = BTreeSet::new();
+                for t in s.params.iter().filter_map(|p| p.1.as_ref()) {
+                    generic_names(t, &mut g);
+                }
+                let hit = g.iter().any(|x| text.contains(x));
+                if hit {
+                    gone.push(format!("{ty}'s {tr}::{} (a text type argument in its parameters)", s.name));
+                }
+                !hit
+            })
             .map(|(s, provided)| {
                 let mut s = s.clone();
                 s.params = s.params.iter().map(|(n, t)| (n.clone(), t.as_ref().map(|t| substitute(t, &map)))).collect();
@@ -626,6 +642,7 @@ impl<'a> Doc<'a> {
                 (s, *provided)
             })
             .collect();
+        self.m.left_out.extend(gone);
         self.m.trait_insts.push(TraitInst { ty: ty.to_string(), tr: tr.to_string(), args, methods });
     }
 
@@ -920,14 +937,19 @@ impl<'a> Doc<'a> {
             }
         }
         // its supertraits: Send, Sync and Sized, or the crate's own (not generic), which keep their
-        // own attach (Volt has no supertraits: a bound names both)
+        // own attach (Volt has no supertraits: a bound names both). A generic one of the crate's
+        // (Labeled: Convert<i32>), whose instance a type attaches on its own, or another crate's
+        // (Shown: Display) is a bound only: the trait is the crate's types' (no Volt type can give
+        // Rust the supertrait), with no dyn handle
         let mut supers = Vec::new();
+        let mut bound_only = false;
         for b in t.get("bounds").map_or(&[][..], Json::arr) {
             let tr = b.get("trait_bound").and_then(|x| x.get("trait"));
             let sup = tr.and_then(|x| x.get("path")).and_then(Json::str).and_then(|p| p.rsplit("::").next()).unwrap_or("?");
             match tr.and_then(|x| x.get("id")).and_then(Json::key).and_then(|id| self.traits.get(&id)) {
                 Some(s) if !has_args(tr.and_then(|x| x.get("args"))) && self.trait_params.get(s).is_some_and(|(g, a)| g.is_empty() && a.is_empty()) => supers.push(s.clone()),
                 None if matches!(sup, "Send" | "Sync" | "Sized") => {}
+                _ if b.get("trait_bound").is_some() => bound_only = true,
                 _ => td.skip = Some(format!("it extends {sup}")),
             }
         }
@@ -963,7 +985,7 @@ impl<'a> Doc<'a> {
         }
         // (a Volt type can't attach one that's generic, has consts or has supertraits: only the
         // crate's types do)
-        let plain = td.params.is_empty() && consts.is_empty() && !odd_const;
+        let plain = td.params.is_empty() && consts.is_empty() && !odd_const && !bound_only;
         td.foreign = !plain || !supers.is_empty();
         if !td.params.is_empty() && !consts.is_empty() {
             td.skip = Some("a generic trait's associated consts".into());

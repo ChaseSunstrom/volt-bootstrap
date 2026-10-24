@@ -118,11 +118,15 @@ fn main() -> void {
 
 Volt's own types attach a trait that's generic, has associated types or consts, or has a
 supertrait of the crate's only once Volt can give Rust a value of one; until then such a trait is
-the crate's types' alone (its parameters a Rust function takes aren't Volt's to pass). A generic
-trait whose methods take a value of one of its type parameters, one with a generic supertrait or
-a supertrait from another crate (beyond `Send`, `Sync` and `Sized`), a function with a type the
-table doesn't have, and a type generic over a const (`Buf<const N: usize>`) are left out, listed in
-a comment of the generated declarations (`VOLT_SHOW_IMPORT=1 voltc check main.volt` prints them).
+the crate's types' alone (its parameters a Rust function takes aren't Volt's to pass). A trait
+with a generic supertrait (`trait Labeled: Convert<i32>`) or another crate's (`trait Shown:
+Display`) is a bound Volt doesn't spell: the crate's types attach it, and their supertrait's
+instance on its own. A generic trait's method taking a value of a type parameter (`fn put(&mut
+self, v: T)` of `Store<T>`) is the instances' whose argument isn't text: `Store<String>`'s `put`
+would take a `str` where the trait says `T`, so that instance leaves it out. A function with a type
+the table doesn't have, and a type generic over a const (`Buf<const N: usize>`), are left out,
+listed in a comment of the generated declarations (`VOLT_SHOW_IMPORT=1 voltc check main.volt`
+prints them).
 
 A panic through a function stops the program with Rust's message, as it would in Rust. Every
 function and method also has a `try_` form (`geom::try_at(xs, 9)`, and a closure's `try_call`)

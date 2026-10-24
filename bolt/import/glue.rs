@@ -1798,7 +1798,9 @@ impl<'a> Gen<'a> {
             // (a parameter of a type parameter: text there is str, not the instance's std::string)
             let generic_in = s.params.iter().any(|(_, t)| t.as_ref().is_some_and(|t| td.params.iter().any(|p| mentions(t, p))));
             let mut ps = vec!["this".to_string()];
-            let mut ok = callable && !generic_in;
+            // (one taking a type parameter's value is optional: an instance whose argument is text
+            // leaves it out, rust.rs inst)
+            let mut ok = callable;
             for (n, t) in &s.params {
                 match t.as_ref().and_then(|t| self.generic_ty(t, false)) {
                     Some(v) if ok => ps.push(format!("{}: {v}", Self::param_name(n))),
@@ -1808,7 +1810,7 @@ impl<'a> Gen<'a> {
             let r = s.ret.as_ref().and_then(|t| self.generic_ty(t, true));
             match (ok, r) {
                 (true, Some(r)) => {
-                    if *provided {
+                    if *provided || generic_in {
                         decl.push_str("    @attributes([@optional])\n");
                     }
                     let _ = writeln!(decl, "    fn {}({}) -> {r};", volt_name(&s.name), ps.join(", "));
