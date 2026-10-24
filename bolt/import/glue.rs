@@ -85,6 +85,8 @@ pub struct Variant {
     /// its fields have names (V { a, b }), or it's a tuple variant (V(a, b), V())
     pub named: bool,
     pub tuple: bool,
+    /// the error is a struct (Result<T, S>), this its one variant: matched as S { .. }
+    pub whole: bool,
 }
 
 /// how a closure crosses: by value (impl Fn, a generic F), lent (&dyn Fn, &mut dyn FnMut), or boxed

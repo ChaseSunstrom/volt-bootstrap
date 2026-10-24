@@ -494,6 +494,9 @@ struct Doc<'a> {
     pending_consts: Vec<(String, String, Vec<(String, Ty)>)>,
     /// the handles of generic traits' objects the signatures name: handle, (trait, arguments)
     dyn_insts: RefCell<BTreeMap<String, (String, Vec<Ty>)>>,
+    /// the crate's structs a Result's Err is, with their fields: each an error set of one variant
+    /// (m.enums), made once the items are read
+    struct_errs: RefCell<BTreeMap<String, Vec<(String, Option<Ty>)>>>,
 }
 
 impl<'a> Doc<'a> {
@@ -507,7 +510,7 @@ impl<'a> Doc<'a> {
         let root = j.get("root")?.key()?;
         let root_items = idx.get(&root)?.get("inner")?.get("module")?.get("items")?.arr().len();
         let lib = idx.get(&root)?.get("name").and_then(Json::str)?.to_string();
-        let mut d = Doc { idx, dir, m: Model::default(), names: BTreeMap::new(), doc_only: Vec::new(), lib, traits: BTreeMap::new(), trait_params: BTreeMap::new(), supers: BTreeMap::new(), pending: Vec::new(), pending_consts: Vec::new(), dyn_insts: RefCell::default() };
+        let mut d = Doc { idx, dir, m: Model::default(), names: BTreeMap::new(), doc_only: Vec::new(), lib, traits: BTreeMap::new(), trait_params: BTreeMap::new(), supers: BTreeMap::new(), pending: Vec::new(), pending_consts: Vec::new(), dyn_insts: RefCell::default(), struct_errs: RefCell::default() };
         let mut items = d.public(&root);
         // an item reached twice at one path (pub use a::X next to pub use a::*) is one item
         let mut once = BTreeSet::new();
@@ -570,6 +573,9 @@ impl<'a> Doc<'a> {
             let recv = rust_ty(&Ty::Named(ty.clone()), &self.lib, &types);
             self.inst(&ty, &tr, args, &recv, &types);
         }
+        for (e, fields) in self.struct_errs.take() {
+            self.m.enums.entry(e.clone()).or_insert_with(|| (vec![Variant { name: e, fields, named: true, tuple: false, whole: true }], false));
+        }
         for (h, (tr, args)) in self.dyn_insts.take() {
             let (Some(td), Some((gps, assoc))) = (self.m.traits.iter().find(|t| t.name == tr).cloned(), self.trait_params.get(&tr).cloned()) else { continue };
             let tpath = self.trait_rust_path(&td);
@@ -606,6 +612,27 @@ impl<'a> Doc<'a> {
                 }
             }
         }
+    }
+
+    /// struct id's named public fields when each is a number, a char or text (an error the
+    /// shim copies out as an enum variant's fields); none for any other
+    fn struct_err_fields(&self, id: &str) -> Option<Vec<(String, Option<Ty>)>> {
+        let st = self.idx.get(id)?.get("inner")?.get("struct")?;
+        let plain = st.get("kind")?.get("plain")?;
+        if plain.get("has_stripped_fields").and_then(Json::bool) == Some(true) {
+            return None;
+        }
+        let mut out = Vec::new();
+        for f in plain.get("fields").map_or(&[][..], Json::arr) {
+            let fit = f.key().and_then(|k| self.idx.get(&k))?;
+            let name = fit.get("name").and_then(Json::str)?.to_string();
+            let t = self.ty(fit.get("inner")?.get("struct_field")?)?;
+            if !matches!(t, Ty::Prim(_) | Ty::Char | Ty::Str | Ty::String) {
+                return None;
+            }
+            out.push((name, Some(t)));
+        }
+        (!out.is_empty()).then_some(out)
     }
 
     /// a generic trait's instance a type attaches: its methods with the arguments in place, each
@@ -1096,7 +1123,7 @@ impl<'a> Doc<'a> {
                 }
                 let named = kind.and_then(|k| k.get("struct")).is_some();
                 let tuple = kind.and_then(|k| k.get("tuple")).is_some();
-                full.push(Variant { name: v.get("name").and_then(Json::str).unwrap_or("_").to_string(), fields, named, tuple });
+                full.push(Variant { name: v.get("name").and_then(Json::str).unwrap_or("_").to_string(), fields, named, tuple, whole: false });
                 if var.and_then(|x| x.get("kind")).and_then(Json::str) != Some("plain") {
                     plain = false;
                 }
@@ -1240,6 +1267,14 @@ impl<'a> Doc<'a> {
             // an Err of one of the crate's enums keeps its variants
             if let Some(e) = args[1].get("resolved_path").and_then(|r| r.get("id")).and_then(Json::key).filter(|id| self.idx.get(id).and_then(|it| it.get("inner")).is_some_and(|i| i.get("enum").is_some())).and_then(|id| self.names.get(&id)) {
                 return Some(Ty::Fails(one()?, e.clone()));
+            }
+            // an Err of one of the crate's structs, its fields numbers, chars or text: an error set
+            // of one variant, the struct's name, holding them
+            if let Some((id, e)) = args[1].get("resolved_path").and_then(|r| r.get("id")).and_then(Json::key).and_then(|id| self.names.get(&id).cloned().map(|e| (id, e))) {
+                if let Some(fields) = self.struct_err_fields(&id) {
+                    self.struct_errs.borrow_mut().entry(e.clone()).or_insert(fields);
+                    return Some(Ty::Fails(one()?, e));
+                }
             }
         }
         if let Some(local) = p.get("id").and_then(Json::key).and_then(|id| self.names.get(&id)) {
@@ -2394,10 +2429,17 @@ impl Lang for Rust {
                 params.extend([format!("{x}: *mut *mut u8"), format!("{x}_n: *mut usize")]);
                 let _ = write!(st, "let _ = ({}); put_str((&&&Msg(ev)).text(), {x}, {x}_n); ", binds.join(", "));
             }
-            let _ = writeln!(arms, "            {ti_path}::{}{pat} => {{ {st}}}", v.name);
+            if v.whole {
+                let _ = writeln!(arms, "            {ti_path}{pat} => {{ {st}}}");
+            } else {
+                let _ = writeln!(arms, "            {ti_path}::{}{pat} => {{ {st}}}", v.name);
+            }
         }
-        // a variant the shim's view doesn't show (#[non_exhaustive], hidden): its text
-        let _ = writeln!(arms, "            _ => {{ *k = u32::MAX; put_str((&&&Msg(ev)).text(), e, e_n); }}");
+        // a variant the shim's view doesn't show (#[non_exhaustive], hidden): its text (none for a
+        // struct's, whose one pattern matches every value)
+        if !vs.iter().any(|v| v.whole) {
+            let _ = writeln!(arms, "            _ => {{ *k = u32::MAX; put_str((&&&Msg(ev)).text(), e, e_n); }}");
+        }
         Some(ShimOut { params, store: format!("{{\n        let ev = &$e;\n        match ev {{\n{arms}        }}\n    }}") })
     }
 

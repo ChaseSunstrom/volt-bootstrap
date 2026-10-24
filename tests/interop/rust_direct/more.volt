@@ -46,6 +46,14 @@ fn main() -> void {
     std::println("taken {} {}", b.take(), b.convert());
     var w = geom::Words::new("ab");
     std::println("words {}", w.take());
+    // an Err of one of the crate's structs: its fields in the error
+    val good = geom::parse_fail("12") catch |e| { return; };
+    val bad = geom::parse_fail("x1") catch |e| {
+        match (e) {
+            .ParseFail(f) => std::println("parse_fail {} {} {}", good, f.0, f.1),
+        }
+        return;
+    };
 }
 // expect: tuple 1.5 3 -2 9 #7 8
 // expect: array 3 2 1
@@ -58,3 +66,4 @@ fn main() -> void {
 // expect: store #700 <bin(7)>
 // expect: taken 7 0
 // expect: words ab
+// expect: parse_fail 12 2 not a number

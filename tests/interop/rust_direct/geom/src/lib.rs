@@ -912,6 +912,23 @@ pub enum NetError {
     Closed(),
 }
 
+// an error the crate describes with a struct: Volt's catch gets its fields, not only its text
+#[derive(Debug)]
+pub struct ParseFail {
+    pub at: i32,
+    pub reason: String,
+}
+
+impl std::fmt::Display for ParseFail {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{} at {}", self.reason, self.at)
+    }
+}
+
+pub fn parse_fail(s: &str) -> Result<i32, ParseFail> {
+    s.parse::<i32>().map_err(|_| ParseFail { at: s.len() as i32, reason: "not a number".into() })
+}
+
 pub fn connect(code: i32) -> Result<i32, NetError> {
     match code {
         0 => Err(NetError::Timeout),

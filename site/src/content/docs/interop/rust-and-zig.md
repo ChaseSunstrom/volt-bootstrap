@@ -59,6 +59,7 @@ which an editor's hover shows; Zig's and Go's do too.
 | `&[T]`, `&mut [T]`, `Vec<T>` | `T[..]` in, `std::vec<T>` out; `&[&str]`, `Vec<String>`: `str[..]`, `std::vec<std::string>` |
 | `Option<T>` | `T?` |
 | `Result<T, E>` with `E` one of the crate's enums (directly or through an alias like `type Result<T> = ...`) | `E!T`: a Volt error set of `E`'s variants, each with its fields (numbers, `char` as `u32`, text as `std::string`; a variant holding anything else carries the error's text), matched like an enum; named `E_error` when `E` is a value elsewhere too |
+| `Result<T, E>` with `E` one of the crate's structs whose public fields are numbers, `char`s or text | `E!T`: an error set of one variant, the struct's name, holding its fields in order (`.ParseFail(f) => f.0`); one used as a value elsewhere too is the set `E_error` |
 | any other `Result<T, E>` | `rust_error!T`; the `Err`'s text (`Display`, else `Debug`) is in `rust_error::ERROR` |
 | a struct whose fields are all `pub` numbers, `bool`s, `char`s, fieldless enums or such structs (and not `#[non_exhaustive]`) | a Volt struct with those fields, passed by value |
 | any other struct, or an enum with data | an owned handle: deleting it drops the Rust value, `copy` clones it (when it's `Clone`); a method taking `self` (or `self: Box<Self>`, `Rc<Self>`, `Arc<Self>`) empties it, one taking `&Rc<Self>`, `&Arc<Self>`, `Pin<&mut Self>` or `Pin<&Self>` borrows it |
