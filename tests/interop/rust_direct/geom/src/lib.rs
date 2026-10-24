@@ -532,6 +532,19 @@ impl Convert<String> for Countdown {
     }
 }
 
+// a tuple and an array as the type argument
+impl Convert<(i32, bool)> for Countdown {
+    fn convert(&self) -> (i32, bool) {
+        (self.n * 2, self.n > 0)
+    }
+}
+
+impl Convert<[i32; 2]> for Countdown {
+    fn convert(&self) -> [i32; 2] {
+        [self.n, -self.n]
+    }
+}
+
 // a supertrait the crate declares: its methods come with the trait
 pub trait Named {
     fn name(&self) -> String;

@@ -1341,7 +1341,9 @@ fn has_args(a: Option<&Json>) -> bool {
 fn arg_ok(t: &Ty) -> bool {
     match t {
         Ty::Prim(_) | Ty::Char | Ty::String | Ty::Named(_) => true,
-        Ty::Vec(e) | Ty::Opt(e) => arg_ok(e),
+        Ty::Vec(e) | Ty::Opt(e) | Ty::Array(e, _) => arg_ok(e),
+        Ty::Tuple(es) => es.iter().all(|(_, e)| arg_ok(e)),
+        Ty::Inst(_, args) => args.iter().all(arg_ok),
         _ => false,
     }
 }
