@@ -898,6 +898,8 @@ attach fn specs_in(this: cparser&, stat: bool&) -> ctype? {
     var longs = 0;
     var int = false;
     var complex = false;
+    var atomic = false;
+    var bitint: u64 = 0; // _BitInt(N)'s N
     var base: ctype? = null;
     loop {
         if (this.skip_noise() ?? return null) {
@@ -905,6 +907,40 @@ attach fn specs_in(this: cparser&, stat: bool&) -> ctype? {
         }
         val n = this.peek_id() ?? break;
         val seen = base != null || signed || unsigned || short || longs > 0 || int;
+        if (n == "_Atomic") {
+            // _Atomic T and _Atomic(T): T's layout for a scalar (a struct's may grow: below)
+            atomic = true;
+            this.i += 1;
+            if (this.is("(")) {
+                this.i += 1;
+                var st = false;
+                base = this.specs_in(&st) ?? return null;
+                while (this.is("*")) {
+                    base = ctype::PTR(bx(base ?? return null));
+                    this.i += 1;
+                }
+                if (!this.eat(")")) {
+                    return null;
+                }
+            }
+            continue;
+        }
+        if (n == "_BitInt" && this.i + 1 < this.t.len && is_p(&this.t[this.i + 1], "(")) {
+            // _BitInt(N): the smallest Volt integer of N bits or more (C's size and alignment)
+            this.i += 2;
+            match (*(this.peek() ?? return null)) {
+                .NUM(x) => {
+                    val cn = parse_cnum(x) ?? return null;
+                    bitint = @cast<u64>(cn.v);
+                },
+                default => { return null; },
+            }
+            this.i += 1;
+            if (!this.eat(")")) {
+                return null;
+            }
+            continue;
+        }
         if (n == "static" || n == "_Thread_local" || n == "thread_local" || n == "__thread") {
             *stat = true;
         } else if (n == "signed" || n == "__signed__" || n == "__signed") {
@@ -939,7 +975,9 @@ attach fn specs_in(this: cparser&, stat: bool&) -> ctype? {
             complex = true;
         } else if (n == "__builtin_va_list") {
             base = ctype::VA_LIST;
-        } else if (n == "_Float32x" || n == "_Float64x" || n == "_Float128x" || n == "_Float16") {
+        } else if (n == "_Float16") {
+            base = ctype::PRIM("f16"); // (Volt's f16 is C's _Float16 on both backends)
+        } else if (n == "_Float32x" || n == "_Float64x" || n == "_Float128x") {
             base = ctype::BAD;
         } else if (n == "struct" || n == "union") {
             this.i += 1;
@@ -1016,7 +1054,44 @@ attach fn specs_in(this: cparser&, stat: bool&) -> ctype? {
         if (complex) {
             return ctype::BAD; // GNU's complex integers
         }
+        if (atomic) {
+            match (base) {
+                .STRUCT(t) => { return ctype::BAD; }, // (C may pad an atomic struct to a lock-free size)
+                default => {},
+            }
+        }
+        if (unsigned) {
+            match (base) {
+                .PRIM(p) => {
+                    if (p == "i128") {
+                        return ctype::PRIM("u128"); // unsigned __int128
+                    }
+                },
+                default => {},
+            }
+        }
         return copy base;
+    }
+    if (bitint > 0) {
+        if (bitint > 128) {
+            return ctype::BAD;
+        }
+        val us: str[5] = { "u8", "u16", "u32", "u64", "u128" };
+        val is: str[5] = { "i8", "i16", "i32", "i64", "i128" };
+        var w: usize = 4;
+        if (bitint <= 8) {
+            w = 0;
+        } else if (bitint <= 16) {
+            w = 1;
+        } else if (bitint <= 32) {
+            w = 2;
+        } else if (bitint <= 64) {
+            w = 3;
+        }
+        if (unsigned) {
+            return ctype::PRIM(us[w]);
+        }
+        return ctype::PRIM(is[w]);
     }
     if (complex || !(signed || unsigned || short || longs > 0 || int)) {
         return null;
@@ -1977,9 +2052,9 @@ attach fn c_text(this: cmapper&, t: ctype&, c_names: std::map<str, str>&) -> std
         .BOOL => { return S("_Bool"); },
         .CHAR => { return S("char"); },
         .PRIM(p) => {
-            val vs: str[12] = { "i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "i128", "u128", "f32", "f64" };
-            val cs: str[12] = { "signed char", "unsigned char", "short", "unsigned short", "int", "unsigned int", "long long", "unsigned long long", "__int128", "unsigned __int128", "float", "double" };
-            for (i) in 0..12 {
+            val vs: str[13] = { "i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "i128", "u128", "f32", "f64", "f16" };
+            val cs: str[13] = { "signed char", "unsigned char", "short", "unsigned short", "int", "unsigned int", "long long", "unsigned long long", "__int128", "unsigned __int128", "float", "double", "_Float16" };
+            for (i) in 0..13 {
                 if (vs[i] == p) {
                     return S(cs[i]);
                 }
@@ -3163,6 +3238,32 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
         val c = c_names.get(s.tag) ?? continue;
         if (s.fields) {
             for (f&) in s.fields.items() {
+                // a flexible array member, T f[]: S_get_f(&s, i) and S_set_f(&s, i, v), C indexing it
+                // (the struct's size and offsets are libclang's: lay_out_partial)
+                match (f.ty) {
+                    .ARRAY(fe, fl) => {
+                        if (fl == null && f.name.len > 0) {
+                            val et = m.c_text(&*fe, &c_names) ?? continue;
+                            var fg = fmt2("{}_get_{}", S(*name), S(f.name));
+                            var fs = fmt2("{}_set_{}", S(*name), S(f.name));
+                            if (declared.get(fg.as_str()) == null && d.env.get(fg.as_str()) == null) {
+                                var get = fmt3("static inline {} {}(const {} *s, size_t i)", copy et, copy fg, S(*c));
+                                protos.append(get.as_str());
+                                protos.append(";\n");
+                                get.append(fmt(" {{ return s->{}[i]; }}", S(f.name)).as_str());
+                                put(&res.includes, move get);
+                            }
+                            if (declared.get(fs.as_str()) == null && d.env.get(fs.as_str()) == null) {
+                                var set = fmt3("static inline void {}({} *s, size_t i, {} v)", copy fs, S(*c), copy et);
+                                protos.append(set.as_str());
+                                protos.append(";\n");
+                                set.append(fmt(" {{ s->{}[i] = v; }}", S(f.name)).as_str());
+                                put(&res.includes, move set);
+                            }
+                        }
+                    },
+                    default => {},
+                }
                 val ty = f.bits ?? continue;
                 var gname = S(*name);
                 gname.append("_get_");

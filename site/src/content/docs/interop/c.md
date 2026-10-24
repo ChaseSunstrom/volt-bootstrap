@@ -50,7 +50,9 @@ How C's types come in:
 | C | Volt |
 | --- | --- |
 | `int`, `long`, `size_t`, `uint8_t`... | the integer type of the same size and sign (`char` is `i8`) |
-| `double`, `float` | `f64`, `f32` |
+| `double`, `float`, `_Float16` | `f64`, `f32`, `f16` |
+| `__int128`, `unsigned __int128`, `_BitInt(N)` (N up to 128) | `i128`, `u128`, the smallest Volt integer of N bits or more (`unsigned _BitInt(24)` a `u32`: a value has to fit N bits) |
+| `_Atomic T`, `_Atomic(T)` of a scalar | `T`, read and written plainly (no ordering: C's atomics give that) |
 | `long double` | `f64`, through a C wrapper (below) |
 | `float _Complex`, `double _Complex` | the struct `ns::cf32` or `ns::cf64`, `{ re, im }`: by value through a C wrapper, as a struct member or pointee directly (the same layout) |
 | `T *` | `T*`, which may be null |
@@ -58,6 +60,7 @@ How C's types come in:
 | `void *` | `void*` |
 | a function pointer | `extern "C" fn(...) -> R`, optional (it may be null) |
 | `T[N]` | `T[N]` (a parameter's is a `T*`, as in C) |
+| a flexible array member, `T f[]` | `S_get_f(&s, i)` and `S_set_f(&s, i, v)`, C indexing it (the struct's size is C's, which leaves it out) |
 | `T __attribute__((vector_size(N)))` (a member or a typedef) | `@vector(T, N / sizeof T)`, with C's layout |
 | `struct`, `union` | the same, with C's layout |
 | a named `enum` | a Volt enum of the same values and integer type, which converts to and from integers |
@@ -66,8 +69,10 @@ How C's types come in:
 
 Flags for the preprocessor (`-I`, `-D`, `-U`, `-isystem`, `-iquote`, `-idirafter`, `-include`)
 come from `--cc`: `voltc run app.volt --cc -Iinclude --cc -DDEBUG`. A struct Volt can only partly
-read (a type it can't parse) still works: voltc asks libclang for its size, alignment and field
-offsets, and skips what it can't name.
+read still works: voltc asks libclang for its size, alignment and field offsets, and skips what it
+can't name. What's left C's: a `long double` member, an `_Atomic` struct (C may pad it to a size
+its atomics take), a `_BitInt` over 128 bits, `_Float32x` and the like, and a type the parser
+can't read (`__typeof__(...)`).
 
 ### Unions, bitfields and anonymous members
 
