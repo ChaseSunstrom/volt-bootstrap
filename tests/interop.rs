@@ -485,6 +485,19 @@ fn bindings_round_trip() {
     assert_eq!(ok(Command::new(e.dir.join("names_main")).output().unwrap(), "names_main"), "2 b c 1 a BACKWARDS 10 324 105 15 11 live 0\n", "a shim's temporaries and its parameters' names");
 }
 
+// a shared library calling a C function nothing defines is refused when it links, on Linux too
+// (whose linker would leave it for load time), as macOS's and Windows' linkers refuse it (T-0749)
+#[test]
+fn lib_shared_undefined() {
+    let e = Env::new("undef");
+    let dir = e.dir.join("undef");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("undef.volt"), "extern \"C\" fn volt_test_nowhere(x: i32) -> i32;\n\nexport fn twice_nowhere(x: i32) -> i32 {\n    return volt_test_nowhere(x) * 2;\n}\n").unwrap();
+    let o = e.voltc(&["lib", "undef", "--pkg", &format!("undef={}", dir.display()), "--shared", "-o", &e.path(&dylib("undef"))]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("volt_test_nowhere"), "an undefined symbol links: {:?} {err}", o.status);
+}
+
 // a slice of slices has a C type of its own (slice_slice_i64), not its elements' name again; slices
 // of lent and of nullable handles share one (the same C type), declared once
 #[test]

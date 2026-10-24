@@ -1698,6 +1698,11 @@ fn cc_run(inputs: std::vec<str>&, out: str, c: cli&, object: bool) -> void {
         }
         if (c.shared) {
             put(&argv, "-shared");
+            // a symbol nothing defines is refused here too, as macOS's and Windows' linkers refuse
+            // it (Linux's would leave it for load time)
+            if (std::process::os() == "linux") {
+                put(&argv, "-Wl,--no-undefined");
+            }
             // and its import library beside it (NAME.lib), which MSVC's link.exe needs to link
             // against the DLL (MinGW's links the DLL itself)
             if (std::process::os() == "windows" && ends_with(out, ".dll")) {
