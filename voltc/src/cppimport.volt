@@ -139,6 +139,9 @@ struct cpp_gen {
     // the enums a map parameter has as keys: a hash attach each (written with the thunks), so a Volt
     // std::map can hold them
     hashed: std::map<str, bool> = {};
+    // the C++ overrides of the class virt_maps last read whose pure virtual methods Volt can't
+    // override: each throws (director puts them in the subclasses' base)
+    pure_stubs: std::string = {};
     enums: std::map<str, str> = {};
     templates: std::map<str, str> = {};
     depth: usize = 0;
@@ -6458,6 +6461,49 @@ attach fn virt_result(this: cpp_gen&, t: clang::CXType) -> virt_ret? {
     return { vty: move vt, cpp_ty: canon(t) };
 }
 
+// a C++ override of the pure virtual method m (of q) that throws a std::logic_error (a noexcept one
+// stops the program), saying why Volt can't override it: the subclasses' base has it, so a Volt
+// type still derives from q
+fn pure_stub(m: clang::CXCursor, q: str, mn: str, why: str) -> std::string {
+    var params = S("");
+    var i: usize = 0;
+    for (ch&) in params_of(m).items() {
+        if (i > 0) {
+            params.append(", ");
+        }
+        params.append(fmt2("volt_id<{}> a{}", canon(clang::clang_getCursorType(*ch)), unum(@cast<u64>(i))).as_str());
+        i += 1;
+    }
+    if (clang::clang_Cursor_isVariadic(m) != 0) {
+        if (i > 0) {
+            params.append(", ");
+        }
+        params.append("...");
+    }
+    var quals = S("");
+    if (clang::clang_CXXMethod_isConst(m) != 0) {
+        quals.append(" const");
+    }
+    val rq = clang::clang_Type_getCXXRefQualifier(clang::clang_getCursorType(m));
+    if (rq == clang::CXRefQualifier_LValue) {
+        quals.append(" &");
+    } else if (rq == clang::CXRefQualifier_RValue) {
+        quals.append(" &&");
+    }
+    if (!may_throw(m)) {
+        quals.append(" noexcept");
+    }
+    var out = fmt4("    volt_id<{}> {}({}){} override {{\n", canon(clang::clang_getCursorResultType(m)), S(mn), move params, copy quals);
+    // (a std::logic_error C++ can catch, and a try_ form gives; a panic from a noexcept one)
+    val msg = fmt3("{}::{} is pure virtual, and Volt can't override it ({})", S(q), S(mn), escape_str(why));
+    if (may_throw(m)) {
+        out.append(fmt("        throw std::logic_error(\"{}\");\n    }}\n", move msg).as_str());
+    } else {
+        out.append(fmt("        volt_cpp_throw(\"{}\");\n    }}\n", move msg).as_str());
+    }
+    return out;
+}
+
 // one overridable virtual method: its C++ and Volt names, parameters and result
 struct virt_map {
     m: clang::CXCursor;
@@ -6475,6 +6521,7 @@ struct virt_map {
 // can't); null when no Volt type can derive from c (a pure virtual one has types Volt can't give,
 // or there are none)
 attach fn virt_maps(this: cpp_gen&, c: clang::CXCursor, q: str, vs: std::vec<virt>&) -> std::vec<virt_map>? {
+    this.pure_stubs = {};
     var seen: std::map<str, bool> = {};
     this.virtuals(c, true, vs, &seen, 0);
     // the ones Volt can override: a later overload of a name by the name and its parameters' C++
@@ -6526,8 +6573,11 @@ attach fn virt_maps(this: cpp_gen&, c: clang::CXCursor, q: str, vs: std::vec<vir
                 if (a) {
                     put(&args, copy a);
                 } else {
-                    ok = false;
-                    break;
+                    // a type Volt has no form for: a void* to C++'s argument, which the override
+                    // can hand back to C++ (@cpp)
+                    val an = fmt("a{}", unum(@cast<u64>(args.len)));
+                    this.line(fmt4("// ({}::{}'s parameter {} has no Volt form: a Volt type's {} gets a void* to C++'s argument)", S(q), copy mn, cursor_name(*ch), copy mn).as_str());
+                    put(&args, { vty: S("void*"), thunk: S("void*"), cpp_ty: S("void *"), cpp: fmt("(void *)&{}", copy an), arg: copy an });
                 }
                 var pn = vname(cursor_name(*ch).as_str());
                 if (pn.len() == 0 || pn.as_str() == "self") {
@@ -6542,8 +6592,10 @@ attach fn virt_maps(this: cpp_gen&, c: clang::CXCursor, q: str, vs: std::vec<vir
         }
         if (!ok || ret == null) {
             if (v.pure) {
-                this.line(fmt3("// (Volt types can't derive from {}: its pure virtual {} is C++'s alone: {})", S(q), copy mn, move why).as_str());
-                return null;
+                // (a C++ override of it that throws: the class stays one Volt types derive from)
+                this.line(fmt3("// ({}::{} is pure virtual and Volt can't override it ({}): a call of it throws)", S(q), copy mn, copy why).as_str());
+                this.pure_stubs.append(pure_stub(v.m, q, mn.as_str(), why.as_str()).as_str());
+                continue;
             }
             this.line(fmt3("// ({}::{} is C++'s own in a Volt type deriving from it: {})", S(q), copy mn, move why).as_str());
             continue;
@@ -6849,6 +6901,7 @@ attach fn director(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str, maps: st
     text.append(fmt("    virtual ~{}() {{ volt_dir_put(volt_self(), 0); }}\n", copy bn).as_str());
     text.append(fmt("    void *volt_self() const {{ return (void *)static_cast<const ::{} *>(this); }}\n", S(q)).as_str());
     text.append(cpp.as_str());
+    text.append(this.pure_stubs.as_str());
     text.append("};\n\n");
     val layers_at = text.len();
     var layers = S("");

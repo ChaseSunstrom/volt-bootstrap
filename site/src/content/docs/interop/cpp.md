@@ -469,9 +469,11 @@ fn main() -> void {
   laid-out class's `Pt&`) is a Volt reference the override gives back (`return &this.n;`), and for
   a class held by handle a reference to a handle (`return &this.item;`), whose object C++ gets; as
   C++'s own rule is, it has to refer to something that outlives the call (the Volt value, the C++
-  object). A virtual method whose types have no Volt form here (a reference to a `std::string`
-  result, a non-const reference to another class held by neither) stays `C`'s, and a comment in
-  the generated source says so; when it's pure, Volt types can't derive from `C`.
+  object). A parameter whose type has no Volt form (a pointer to member, say) comes as a `void*`
+  to C++'s argument, which the override can hand back to C++ through `@cpp`. A virtual method whose
+  result has no Volt form here (a reference to a `std::string`, a pointer to member) stays `C`'s,
+  and a comment in the generated source says so; when it's pure, Volt types still derive from `C`,
+  and C++'s call of it throws a `std::logic_error` saying why (a `noexcept` one stops the program).
 - `derive` is there for a class with a virtual method that isn't `final`; its destructor needn't be
   virtual. Volt deletes a derived object as what it is, its Volt value with it; C++ deleting one
   through a `C*` whose destructor isn't virtual is C++'s own undefined behavior, as for any

@@ -2000,6 +2000,18 @@ fn cpp_derive3() {
 }
 
 #[test]
+fn cpp_derive5() {
+    // a Volt subclass of a class whose virtual methods have types Volt has no form for: a
+    // pointer-to-member parameter reaches the override as a void*, and a pure virtual whose result
+    // has none doesn't keep Volt types from deriving (C++'s call of it throws)
+    let e = Env::new("cpp-derive5");
+    let want = "used 1607\nask threw\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_derive5.volt", "--backend", backend]), "voltc run cpp_derive5.volt"), want, "C++ derive, types with no Volt form ({backend})");
+    }
+}
+
+#[test]
 fn cpp_derive4() {
     // a Volt subclass overriding the & twin of a virtual method declared after its && one, the
     // later of two overloads differing only in const by its _const or _nonconst name, and the
