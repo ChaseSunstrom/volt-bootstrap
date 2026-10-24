@@ -625,10 +625,12 @@ attach fn print_code(this: checker&, code: std::vec<u32>&, sink: u32, c: u32, t:
                 put(code, this.out_rt(sink, "volt_print_str", s));
                 return;
             }
-            // one that attaches to_string(this: T&) giving a type with as_str prints that text (a
-            // Rust type's Display, through bolt), deleted after
-            val ts = try this.hook(t, "to_string");
-            if (ts) {
+            // one that attaches its own to_string(this: T&) giving a type with as_str prints that
+            // text (a Rust type's Display, through bolt), deleted after; not a generic one, which
+            // may print the value itself (std::derive's formats *this)
+            val tso = try this.hook(t, "to_string");
+            val ts = tso ?? 0;
+            if (tso != null && this.fn_generics(this.fi(ts).decl).len == 0) {
                 val rt = this.fi(ts).ret;
                 val sh = try this.hook(rt, "as_str");
                 if (sh) {
