@@ -45,6 +45,9 @@ fn main() -> void {
     std::println("grown {}", geom::area_of(&t));
     std::println("{}", geom::describe_it(t));
     std::println("{}", geom::describe_it({ n: 5 } as blob));
+    // a default (summary) calling another (describe) sees the Volt type's own describe
+    var bl: blob = { n: 5 };
+    std::println("{} {}", geom::summarize_it(&t), geom::summarize_it(&bl));
     var c = geom::circle_of(1.0);
     c.grow(1.0);
     {

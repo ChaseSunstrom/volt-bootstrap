@@ -2282,8 +2282,9 @@ impl Lang for Rust {
         let (tp, mg) = (self.trait_path(t), Gen::trait_mangle(t));
         let mut out = String::new();
         let mut fields = vec!["    drop: Option<unsafe extern \"C\" fn(*mut c_void)>,".to_string()];
-        let (mut imp, mut def) = (String::new(), String::new());
-        let mut provided_any = false;
+        let mut imp = String::new();
+        // each method forwarded to the whole Volt value (name, the forwarding method, provided)
+        let mut fwds: Vec<(String, String, bool)> = Vec::new();
         for (s, provided) in ms {
             let n = &s.name;
             let mut cps = vec!["*mut c_void".to_string()];
@@ -2341,24 +2342,28 @@ impl Lang for Rust {
             let me = if s.recv == Recv::Mut { "&mut " } else { "&" };
             let mut fwd = vec![format!("{me}self.0")];
             fwd.extend(names.iter().cloned());
+            fwds.push((n.clone(), format!("    {head} {{\n        {tp}::{n}({})\n    }}\n", fwd.join(", ")), *provided));
             if *provided {
-                provided_any = true;
                 fields.push(format!("    m_{n}: Option<{fty}>,"));
                 let mut d = vec![format!("{me}d")];
                 d.extend(names.iter().cloned());
-                let _ = write!(imp, "    {head} {{\n        match self.t.m_{n} {{\n            Some(f) => {},\n            None => {{\n                let {}d = Def_{mg}(Volt_{mg} {{ env: self.env, t: VT_{mg} {{ drop: None, ..self.t }} }});\n                {tp}::{n}({})\n            }}\n        }}\n    }}\n", call("f"), if s.recv == Recv::Mut { "mut " } else { "" }, d.join(", "));
+                let _ = write!(imp, "    {head} {{\n        match self.t.m_{n} {{\n            Some(f) => {},\n            None => {{\n                let {}d = Def_{mg}_{n}(Volt_{mg} {{ env: self.env, t: VT_{mg} {{ drop: None, ..self.t }} }});\n                {tp}::{n}({})\n            }}\n        }}\n    }}\n", call("f"), if s.recv == Recv::Mut { "mut " } else { "" }, d.join(", "));
             } else {
                 fields.push(format!("    m_{n}: {fty},"));
                 let _ = writeln!(imp, "    {head} {{\n        {}\n    }}", call(&format!("(self.t.m_{n})")));
-                let _ = writeln!(def, "    {head} {{\n        {tp}::{n}({})\n    }}", fwd.join(", "));
             }
         }
         let _ = write!(out, "// {tp} on a Volt value: its methods' table (drop: None when it's lent), and the type implementing the trait by calling it\n#[repr(C)]\n#[derive(Clone, Copy)]\npub struct VT_{mg} {{\n{}\n}}\n\npub struct Volt_{mg} {{\n    env: *mut c_void,\n    t: VT_{mg},\n}}\n\n", fields.join("\n"));
         let _ = write!(out, "// Volt has no Send or Sync: a Volt value another thread uses is the program's to share, as in C\nunsafe impl Send for Volt_{mg} {{}}\nunsafe impl Sync for Volt_{mg} {{}}\n\nimpl Drop for Volt_{mg} {{\n    fn drop(&mut self) {{\n        if let Some(d) = self.t.drop {{\n            unsafe {{ d(self.env) }}\n        }}\n    }}\n}}\n\nimpl {tp} for Volt_{mg} {{\n{imp}}}\n\n");
-        if provided_any {
-            // ponytail: a default body sees Volt's required methods but Rust's other defaults, even
-            // where the Volt type wrote one (Rust can't call a trait's default from an impl)
-            let _ = write!(out, "// the trait's own bodies of the methods a Volt type left out, over its required ones\nstruct Def_{mg}(Volt_{mg});\n\nimpl {tp} for Def_{mg} {{\n{def}}}\n\n");
+        // a provided method the Volt type left out: Rust's own body, run on a value whose every
+        // other method is the Volt value's (its own, or that one's default the same way), so the
+        // body's calls dispatch as Rust's would (Rust can't call a default from an impl)
+        for (n, _, provided) in &fwds {
+            if !provided {
+                continue;
+            }
+            let others: String = fwds.iter().filter(|(m, _, _)| m != n).map(|(_, f, _)| f.as_str()).collect();
+            let _ = write!(out, "// {tp}::{n}'s own body, over the Volt value's other methods\nstruct Def_{mg}_{n}(Volt_{mg});\n\nimpl {tp} for Def_{mg}_{n} {{\n{others}}}\n\n");
         }
         Some(out)
     }

@@ -368,6 +368,10 @@ pub trait Shape {
     fn describe(&self) -> String {
         format!("{} of area {}", self.name(), self.area())
     }
+    // a default calling another default: a Volt type's own describe is the one it sees
+    fn summary(&self) -> String {
+        format!("({})", self.describe())
+    }
 }
 
 pub struct Circle {
@@ -441,6 +445,10 @@ pub fn grow_twice(s: &mut dyn Shape, by: f64) {
 
 pub fn describe_it(s: impl Shape) -> String {
     format!("{} [{}]", s.describe(), s.label())
+}
+
+pub fn summarize_it(s: &dyn Shape) -> String {
+    s.summary()
 }
 
 pub fn larger<S: Shape>(a: &S, b: &S) -> f64 {
