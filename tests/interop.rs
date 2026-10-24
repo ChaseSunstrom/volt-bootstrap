@@ -2333,11 +2333,11 @@ fn cpp_params() {
     }
     // std::map / std::unordered_map by value, const& or && (an alias too) take a Volt std::map&,
     // beside the handle form: stdcxx's, or (no stdcxx form: a std::string key, std::vector<bool>
-    // values) a handle of the instance's own; a mutable one keeps its handle form only
+    // values) a handle of the instance's own; a mutable one too, C++'s entries copied back
     for decl in ["fn dump(m: std::map<i32, i32>&)", "fn dump(m: stdcxx::map<i32, i32>&)", "fn try_dump(m: std::map<i32, i32>&)", "fn dump_u(m: std::map<i32, f64>&)", "fn dump_u(m: stdcxx::unordered_map<i32, f64>)", "fn dump_s(m: std::map<std::string, i32>&)", "fn dump_ss(m: std::map<std::string, std::string>&)", "fn dump_v(m: std::map<i32, std::vec<i32>>&)", "fn dump_rv(m: std::map<i32, i32>&)", "fn dump_a(m: std::map<i32, i32>&)", "fn put_in(m: stdcxx::map<i32, i32>&)", "fn put_s(m: map_", "fn bits(m: map_", "fn dump_s(m: map_"] {
         assert!(src.contains(decl), "{decl}: {src}");
     }
-    assert!(!src.contains("fn put_in(m: std::map<") && !src.contains("fn put_s(m: std::map<"), "a mutable map& has no Volt map form: {src}");
+    assert!(src.contains("fn put_in(m: std::map<i32, i32>&)") && src.contains("fn put_s(m: std::map<std::string, i32>&)"), "a mutable map& has a Volt map form beside its handle: {src}");
     // const& beside &&: the twin pass's second one an alias; a result pointing into the map's copy
     // (a pointer, a view) isn't declared with a Volt std::map& (a copied-out vector is)
     for decl in ["fn both(a0: std::map<i32, i32>&) -> i32", "fn both(a0: stdcxx::map<i32, i32>) -> i32", "fn both_std_map_int_int_rref(a0: std::map<i32, i32>&) -> i32", "fn find(m: stdcxx::map<i32, i32>&, k: i32) -> i32*", "fn row0(m: std::map<i32, std::vec<i32>>&)"] {
@@ -2526,6 +2526,18 @@ fn cpp_fn_refs() {
     let want = "shout hi!\nmeasure 10\nmade tri:16\ntwice 25\nrenamed b\nmoved 72\ntaken 4\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_fn_refs.volt", "--backend", backend]), "voltc run cpp_fn_refs.volt"), want, "std::functions over references and handle classes ({backend})");
+    }
+}
+
+#[test]
+fn cpp_maps_more() {
+    // a Volt std::map for a std::map with another order (std::greater, a comparator class), a
+    // mutable map& and unordered_map& (C++'s inserts, changes and erases come back), enum keys and
+    // values, values of a class Volt lays out
+    let e = Env::new("cpp-maps-more");
+    let want = "first_desc 5\nshortest a\nbump 3 12 11 11\ndrop_odd false 1\nreds 4\npaint true\nxsum 7\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_maps_more.volt", "--backend", backend]), "voltc run cpp_maps_more.volt"), want, "map parameters ({backend})");
     }
 }
 
@@ -2822,8 +2834,8 @@ fn cpp_params_refused() {
     assert!(err.contains("std::vector<std::vector<Shape>>") && err.contains("cpp_params_unmapped.volt:6"), "a wrong argument per use: {err}");
     // a mutable std::map& with no stdcxx form takes the instance's handle only: a call with a Volt
     // map (which C++ would change a copy of) is refused, naming both types
-    let err = check("cpp_params_map.volt");
-    assert!(err.contains("but 'put_s' wants a cpp::map_") && err.contains("std::map<std::string") && err.contains("cpp_params_map.volt:7"), "a mutable map takes its handle: {err}");
+    // a mutable map takes a Volt map too, C++'s entries copied back (cpp_maps_more)
+    assert_eq!(ok(e.voltc(&["run", "cpp_params_map.volt"]), "voltc run cpp_params_map.volt"), "1 7\n", "a mutable map& given a Volt map");
     // Volt references per use, one wanting an int& and another an int*, none fitting: the lvalue reading's error
     let err = check("cpp_params_mixed.volt");
     assert!(err.contains("cannot initialize a parameter of type 'int *' with an lvalue of type 'double'") && err.contains("cpp_params_mixed.volt:8"), "an lvalue and an address in one call: {err}");
