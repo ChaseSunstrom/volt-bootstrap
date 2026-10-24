@@ -39,6 +39,22 @@ fn kinds() -> void {
     val nz = kd::noteOf(true);
     val n6 = n1.copy();
     std::println("note {} {} {} {} {} {} {} {}", kd::noteSize(&n1), kd::noteSize(&n2), kd::noteSize(&n3), kd::noteSize(&n4), kd::noteSize(&n5), n1.as_text() ?? std::string::from("?"), nz.as_text() ?? std::string::from("?"), n6.as_text() ?? std::string::from("?"));
+    {
+        val nd = kd::noteSame(&n1);
+        std::print("same {} ", nd.as_text() ?? std::string::from("?"));
+    }
+    std::println("{}", n1.as_text() ?? std::string::from("?"));
+    // a bare union: Volt remembers the field it set, so the next set or the drop frees its payload
+    var sl = kd::Slot::text("abc");
+    val l1 = kd::slotLen(&sl, 0);
+    sl.set_nums(ns[..]);
+    val l2 = kd::slotLen(&sl, 1);
+    sl.set_buf(kd::Buf::init(4));
+    val sb = sl.buf();
+    val l3 = kd::bufLen(&sb);
+    sl.set_n(9);
+    val s2 = kd::Slot::buf(kd::Buf::init(2));
+    std::println("slot {} {} {} {} {}", l1, l2, l3, sl.n(), kd::slotLen(&s2, 2));
     std::println("area {} {} round {} {}", kd::shapeArea(&s), kd::shapeArea(&r), s.isRound(), r.isRound());
 
     // a bare union: a handle with a reader and a setter per field

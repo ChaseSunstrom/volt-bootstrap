@@ -72,8 +72,9 @@ pub fn import(r: &Req) -> Result<(), String> {
             Some(Ty::Opt(x)) => if let Ty::Named(n) = &**x { deinit.get(n).map(|a| (f.clone(), *a, true)) } else { None },
             _ => None,
         }).collect()))).collect();
-        let owned = w.unions.iter().filter(|u| u.1 .0).map(|(u, (_, fs))| (u.clone(), fs.iter().filter(|(_, t)| matches!(t, Some(Ty::Str | Ty::Slice(..) | Ty::Ref(..))) || matches!(t, Some(Ty::Opt(x)) if matches!(**x, Ty::Str | Ty::Slice(..) | Ty::Ref(..)))).map(|(f, _)| f.clone()).collect())).collect();
-        let lang = Zig { deinit, opaques: w.opaques.clone(), unions, owned };
+        let lent = |t: &Option<Ty>| matches!(t, Some(Ty::Str | Ty::Slice(..) | Ty::Ref(..))) || matches!(t, Some(Ty::Opt(x)) if matches!(**x, Ty::Str | Ty::Slice(..) | Ty::Ref(..)));
+        let tracked = w.unions.iter().filter(|(_, (tagged, fs))| !tagged || fs.iter().any(|(_, t)| lent(t))).map(|(u, _)| u.clone()).collect();
+        let lang = Zig { deinit, opaques: w.opaques.clone(), unions, tracked };
         let (shim, volt) = Gen::new(&m, &r.alias, &lang).write("the file");
         crate::build::write_if_changed(&shim_file, &shim)?;
         let mut c = Command::new(&zig);
@@ -143,7 +144,7 @@ impl Walker {
         // a tagged union holding a payload that frees what it holds: its drop frees that too, so it
         // can't be copied (and moves when passed by value)
         for t in &mut m.types {
-            if self.unions.get(&t.name).is_some_and(|(tagged, ps)| *tagged && ps.iter().any(|p| frees(&p.1))) {
+            if self.unions.get(&t.name).is_some_and(|(_, ps)| ps.iter().any(|p| frees(&p.1))) {
                 t.clone = false;
                 t.opaque = true;
             }
@@ -161,6 +162,20 @@ impl Walker {
         for (u, ms) in &mut m.methods {
             let Some((tagged, _)) = self.unions.get(u) else { continue };
             for s in ms.iter_mut() {
+                // a bare union's read of a payload with a deinit: lent too
+                if !*tagged && s.recv == Recv::Ref && s.call.as_deref() == Some(&format!("=$r.{}", s.name)) && frees(&s.ret) {
+                    let f = s.name.clone();
+                    let (named, opt) = match s.ret.clone() {
+                        Some(Ty::Opt(y)) => (*y, true),
+                        Some(y) => (y, false),
+                        None => continue,
+                    };
+                    let r = Ty::Ref(Box::new(named), true);
+                    s.ret = Some(if opt { Ty::Opt(Box::new(r)) } else { r });
+                    s.call = Some(if opt { format!("=if ($r.{f}) |*y| y else null") } else { format!("=&$r.{f}") });
+                    s.src = format!("{u}.{f}, lent (reading a field that isn't the active one is a Zig safety check)");
+                    continue;
+                }
                 let Some(f) = s.name.strip_prefix("as_").map(String::from) else { continue };
                 // (the read gives an optional of the payload: Buf, or ?Buf)
                 let payload_frees = matches!(&s.ret, Some(Ty::Opt(x)) if frees(&Some((**x).clone())));
@@ -177,12 +192,10 @@ impl Walker {
             }
             ms.retain(|s| {
                 let ours = s.call.as_ref().is_some_and(|c| c.starts_with('='));
-                let why = if ours && *tagged && s.params.first().is_some_and(|p| uncopyable(&p.1)) {
+                let why = if ours && s.params.first().is_some_and(|p| uncopyable(&p.1)) {
                     "its pointer payload is to a value Volt can't copy"
                 } else if ours && frees(&s.ret) {
                     "it would copy a value that frees what it holds"
-                } else if ours && !tagged && s.params.first().is_some_and(|p| frees(&p.1)) {
-                    "a bare union never frees its payload"
                 } else {
                     return true;
                 };
@@ -486,7 +499,7 @@ impl Walker {
         let borrows = |t: &Ty| matches!(t, Ty::Str | Ty::Slice(..) | Ty::Ref(..));
         let borrows = |t: &Option<Ty>| matches!(t, Some(Ty::Opt(x)) if borrows(x)) || t.as_ref().is_some_and(borrows);
         // ...so a tagged union's maker copies it (text, numbers or text in a slice, what a pointer
-        // points at), and the union frees the copy (own_copy; model() drops a pointer to a type
+        // points at), and the union frees the copy (vu_copy; model() drops a pointer to a type
         // that can't be copied)
         let copies = |t: &Ty| match t {
             Ty::Str => true,
@@ -501,29 +514,36 @@ impl Walker {
         };
         let sig = |n: String, recv: Recv, params: Vec<(String, Option<Ty>)>, ret: Option<Ty>, call: String, src: String| Sig { name: n, recv, params, ret, skip: None, src, generics: Vec::new(), call: Some(call) };
         let ms = self.m.methods.entry(name.to_string()).or_default();
-        for (f, _, t) in &fields {
+        for (k, (f, _, t)) in fields.iter().enumerate() {
             let unit = *t == Some(Ty::Unit);
             let (arg, params) = if unit { ("{}", Vec::new()) } else { ("$0", vec![("v".to_string(), t.clone())]) };
             let lent = borrows(t);
-            if lent && !(tag.is_some() && copies(t)) {
+            // the union Volt makes is marked the owner of its payload when it's a copy (or, in a bare
+            // union, any payload: its drop frees the marked field's, vu_free); k + 1 names the field
+            let val = if lent { format!("vu_copy({arg})") } else { arg.to_string() };
+            let mark = lent || tag.is_none();
+            if lent && !copies(t) {
                 self.m.left_out.push(format!("{name}::{f} (its payload would borrow what Volt passes)"));
-            } else if lent {
-                ms.push(sig(f.clone(), Recv::None, params.clone(), Some(Ty::SelfTy), format!("=@unionInit($T, \"{f}\", own_copy({arg}))"), format!("{name}{{ .{f} = v }} (a copy of v, which the union frees)")));
+            } else if mark {
+                ms.push(sig(f.clone(), Recv::None, params.clone(), Some(Ty::SelfTy), format!("=vu_pend({}, @unionInit($T, \"{f}\", {val}))", k + 1), format!("{name}{{ .{f} = v }}{}", if lent { " (a copy of v, which the union frees)" } else { "" })));
             } else {
                 ms.push(sig(f.clone(), Recv::None, params.clone(), Some(Ty::SelfTy), format!("=@unionInit($T, \"{f}\", {arg})"), format!("{name}{{ .{f} = v }}")));
             }
-            if unit {
+            if unit && tag.is_some() {
                 continue;
             }
             if tag.is_some() {
                 ms.push(sig(format!("as_{f}"), Recv::Ref, Vec::new(), t.clone().map(|t| Ty::Opt(Box::new(t))), format!("=if ($r.* == .{f}) $r.{f} else null"), format!("{name}.{f}, when it's the active field")));
             } else {
-                ms.push(sig(f.clone(), Recv::Ref, Vec::new(), t.clone(), format!("=$r.{f}"), format!("{name}.{f} (reading a field that isn't the active one is a Zig safety check)")));
-                if lent {
+                if !unit {
+                    ms.push(sig(f.clone(), Recv::Ref, Vec::new(), t.clone(), format!("=$r.{f}"), format!("{name}.{f} (reading a field that isn't the active one is a Zig safety check)")));
+                }
+                if lent && !copies(t) {
                     self.m.left_out.push(format!("{name}::set_{f} (its payload would borrow what Volt passes)"));
                     continue;
                 }
-                ms.push(sig(format!("set_{f}"), Recv::Mut, params, Some(Ty::Unit), format!("=$r.* = @unionInit($T, \"{f}\", {arg})"), format!("{name}{{ .{f} = v }}, the active field from now on")));
+                // (the payload Volt set before freed first)
+                ms.push(sig(format!("set_{f}"), Recv::Mut, params, Some(Ty::Unit), format!("=vu_set($T, $r, {}, @unionInit($T, \"{f}\", {val}))", k + 1), format!("{name}{{ .{f} = v }}, the active field from now on")));
             }
         }
         if let Some(t) = tag {
@@ -949,9 +969,10 @@ struct Zig {
     /// tagged unions: how many fields, and those whose payload has a deinit (whether it takes the
     /// allocator, whether the payload is an optional of it): dropping one deinits its active payload
     unions: BTreeMap<String, (usize, Vec<(String, bool, bool)>)>,
-    /// a tagged union's fields whose payload may be a copy Volt's maker made (text, slices,
-    /// pointers): its drop frees the copy, its clone copies it again
-    owned: BTreeMap<String, Vec<String>>,
+    /// unions whose handles Volt may mark the owner of a payload (vu_): every bare union, and a
+    /// tagged one with a text, slice or pointer payload; their drop frees it, their clone copies
+    /// it, the shim's handle store adopts a maker's mark and a move to Zig forgets it
+    tracked: BTreeSet<String>,
 }
 
 impl Zig {
@@ -1052,7 +1073,12 @@ impl Lang for Zig {
                             p.arg = ptr;
                         } else if ti.def.opaque {
                             // moved: the value comes out of its box, which is freed
-                            p.pre.extend([format!("const {a}_p: *{zp} = @ptrCast(@alignCast({a}));"), format!("const {a}_v = {a}_p.*;"), format!("alloc.destroy({a}_p);")]);
+                            p.pre.extend([format!("const {a}_p: *{zp} = @ptrCast(@alignCast({a}));"), format!("const {a}_v = {a}_p.*;")]);
+                            // (what Volt owned in it goes with it)
+                            if self.tracked.contains(&ti.def.name) {
+                                p.pre.push(format!("vu_forget({a}_p);"));
+                            }
+                            p.pre.push(format!("alloc.destroy({a}_p);"));
                             p.arg = format!("{a}_v");
                         } else {
                             p.arg = format!("{ptr}.*");
@@ -1127,7 +1153,11 @@ impl Lang for Zig {
                 let (zp, mg) = (Self::path(&ti.def), Gen::mangle(&ti.def));
                 match ti.kind {
                     Kind::Plain => ShimOut { params: vec![format!("{o}: *V_{mg}")], store: format!("{o}.* = to_{mg}($v);") },
-                    Kind::Handle => ShimOut { params: vec![format!("{o}: *?*anyopaque")], store: format!("{{ const {o}_p = alloc.create({zp}) catch @panic(\"out of memory\"); {o}_p.* = $v; {o}.* = {o}_p; }}") },
+                    Kind::Handle => {
+                        // (a union a maker marked: the box is its owner, vu_adopt)
+                        let adopt = if self.tracked.contains(&ti.def.name) { format!(" vu_adopt({o}_p);") } else { String::new() };
+                        ShimOut { params: vec![format!("{o}: *?*anyopaque")], store: format!("{{ const {o}_p = alloc.create({zp}) catch @panic(\"out of memory\"); {o}_p.* = $v;{adopt} {o}.* = {o}_p; }}") }
+                    }
                     Kind::Enum => ShimOut { params: vec![format!("{o}: *i64")], store: format!("{o}.* = @as(i64, @intFromEnum($v));") },
                 }
             }
@@ -1254,34 +1284,26 @@ impl Lang for Zig {
             }
             Kind::Handle => {
                 let drop = g.sym(&[&mg, "drop"]);
-                let owned = self.owned.get(&ti.def.name).cloned().unwrap_or_default();
+                let tracked = self.tracked.contains(&ti.def.name);
                 let deinit = match (self.deinit.get(&ti.def.name), self.unions.get(&ti.def.name)) {
                     (Some(true), _) => "p.deinit(alloc);\n    ".to_string(),
                     (Some(false), _) => "p.deinit();\n    ".to_string(),
-                    (None, Some((n, fs))) if !fs.is_empty() || !owned.is_empty() => {
-                        let mut arms: String = fs.iter().map(|(f, a, opt)| {
+                    (None, Some((n, fs))) if !fs.is_empty() => {
+                        let arms: String = fs.iter().map(|(f, a, opt)| {
                             let call = format!("deinit({})", if *a { "alloc" } else { "" });
                             if *opt { format!(".{f} => |*x| if (x.*) |*y| y.{call}, ") } else { format!(".{f} => |*x| x.{call}, ") }
                         }).collect();
-                        // (a copy a maker made: freed)
-                        for f in &owned {
-                            let _ = write!(arms, ".{f} => |x| own_free(x), ");
-                        }
-                        format!("switch (p.*) {{ {arms}{}}}\n    ", if fs.len() + owned.len() < *n { "else => {}, " } else { "" })
+                        format!("switch (p.*) {{ {arms}{}}}\n    ", if fs.len() < *n { "else => {}, " } else { "" })
                     }
                     _ => String::new(),
                 };
+                // (the payload Volt marked its own: freed)
+                let deinit = if tracked { format!("vu_free({zp}, p);\n    {deinit}") } else { deinit };
                 let _ = writeln!(out, "export fn {drop}(h: *anyopaque) void {{\n    const p: *{zp} = @ptrCast(@alignCast(h));\n    {deinit}alloc.destroy(p);\n}}\n");
                 if ti.def.clone {
                     let cl = g.sym(&[&mg, "clone"]);
-                    // (a maker's copy: copied again, so each union frees its own)
-                    let again = if owned.is_empty() {
-                        String::new()
-                    } else {
-                        let n = self.unions.get(&ti.def.name).map_or(0, |u| u.0);
-                        let arms: String = owned.iter().map(|f| format!(".{f} => |*x| x.* = own_again(x.*), ")).collect();
-                        format!("\n    switch (q.*) {{ {arms}{}}}", if owned.len() < n { "else => {}, " } else { "" })
-                    };
+                    // (the payload Volt marked its own: copied, so each union frees its own)
+                    let again = if tracked { format!("\n    vu_clone({zp}, p, q);") } else { String::new() };
                     let _ = writeln!(out, "export fn {cl}(h: *anyopaque) *anyopaque {{\n    const p: *{zp} = @ptrCast(@alignCast(h));\n    const q = alloc.create({zp}) catch @panic(\"out of memory\");\n    q.* = p.*;{again}\n    return q;\n}}\n");
                 }
             }
@@ -1310,7 +1332,7 @@ impl Lang for Zig {
         s.push_str("fn strs(p: ?[*]const VoltStr, n: usize) [][]const u8 {\n    const out = alloc.alloc([]const u8, n) catch @panic(\"out of memory\");\n    for (sl(VoltStr, p, n), 0..) |x, i| out[i] = s(x.p, x.n);\n    return out;\n}\n");
         s.push_str("// a slice made with alloc: handed over as it is\nfn put_owned(comptime T: type, v: []const T, p: *?[*]T, n: *usize) void {\n    p.* = @constCast(v.ptr);\n    n.* = v.len;\n}\n");
         s.push_str("// a slice someone else owns: a copy made with alloc\nfn put_copy(comptime T: type, v: []const T, p: *?[*]T, n: *usize) void {\n    const d = alloc.dupe(T, v) catch @panic(\"out of memory\");\n    p.* = d.ptr;\n    n.* = d.len;\n}\n\n");
-        s.push_str("// the copies Volt's union makers made (by address): a union's drop frees its payload only when\n// it's one of them, never what Zig made it with\nvar own_set: std.AutoHashMapUnmanaged(usize, void) = .empty;\nvar own_lock: std.atomic.Mutex = .unlocked;\nfn own_add(p: usize) void {\n    while (!own_lock.tryLock()) {}\n    defer own_lock.unlock();\n    own_set.put(alloc, p, {}) catch @panic(\"out of memory\");\n}\nfn own_take(p: usize) bool {\n    while (!own_lock.tryLock()) {}\n    defer own_lock.unlock();\n    const had = own_set.remove(p);\n    if (own_set.count() == 0) own_set.clearAndFree(alloc);\n    return had;\n}\nfn own_has(p: usize) bool {\n    while (!own_lock.tryLock()) {}\n    defer own_lock.unlock();\n    return own_set.contains(p);\n}\n// a copy of a payload Volt lent (text, a slice, what a pointer points at), the union's to free\nfn own_copy(v: anytype) @TypeOf(v) {\n    switch (@typeInfo(@TypeOf(v))) {\n        .optional => return if (v) |x| own_copy(x) else null,\n        .pointer => |q| switch (q.size) {\n            .slice => {\n                if (v.len == 0) return v;\n                const c = alloc.dupe(q.child, v) catch @panic(\"out of memory\");\n                own_add(@intFromPtr(c.ptr));\n                return c;\n            },\n            .one => {\n                const c = alloc.create(q.child) catch @panic(\"out of memory\");\n                c.* = v.*;\n                own_add(@intFromPtr(c));\n                return c;\n            },\n            else => return v,\n        },\n        else => return v,\n    }\n}\n// a payload freed when it's a maker's copy\nfn own_free(v: anytype) void {\n    switch (@typeInfo(@TypeOf(v))) {\n        .optional => if (v) |x| own_free(x),\n        .pointer => |q| switch (q.size) {\n            .slice => if (v.len != 0 and own_take(@intFromPtr(v.ptr))) alloc.free(v),\n            .one => if (own_take(@intFromPtr(v))) alloc.destroy(v),\n            else => {},\n        },\n        else => {},\n    }\n}\n// a clone's payload: a maker's copy copied again\nfn own_again(v: anytype) @TypeOf(v) {\n    switch (@typeInfo(@TypeOf(v))) {\n        .optional => return if (v) |x| own_again(x) else null,\n        .pointer => |q| switch (q.size) {\n            .slice => return if (v.len != 0 and own_has(@intFromPtr(v.ptr))) own_copy(v) else v,\n            .one => return if (own_has(@intFromPtr(v))) own_copy(v) else v,\n            else => return v,\n        },\n        else => return v,\n    }\n}\n\n");
+        s.push_str("// the unions Volt made or set (by handle address), with the field (from 1) whose payload Volt\n// copied or moved in: their drop, or the next set, frees that one's; a union Zig made isn't here\nvar vu_tab: std.AutoHashMapUnmanaged(usize, u16) = .empty;\nvar vu_lock: std.atomic.Mutex = .unlocked;\nthreadlocal var vu_pending: u16 = 0;\nfn vu_put(p: usize, i: u16) void {\n    while (!vu_lock.tryLock()) {}\n    defer vu_lock.unlock();\n    vu_tab.put(alloc, p, i) catch @panic(\"out of memory\");\n}\nfn vu_take(p: usize) u16 {\n    while (!vu_lock.tryLock()) {}\n    defer vu_lock.unlock();\n    const i = if (vu_tab.fetchRemove(p)) |kv| kv.value else 0;\n    if (vu_tab.count() == 0) vu_tab.clearAndFree(alloc);\n    return i;\n}\nfn vu_get(p: usize) u16 {\n    while (!vu_lock.tryLock()) {}\n    defer vu_lock.unlock();\n    return vu_tab.get(p) orelse 0;\n}\n// a maker's union, field i its payload: the shim's box for it becomes the owner (vu_adopt)\nfn vu_pend(i: u16, v: anytype) @TypeOf(v) {\n    vu_pending = i;\n    return v;\n}\nfn vu_adopt(p: anytype) void {\n    const i = vu_pending;\n    vu_pending = 0;\n    if (i != 0) vu_put(@intFromPtr(p), i);\n}\n// moved to Zig: what Volt owned in it is Zig's now\nfn vu_forget(p: anytype) void {\n    _ = vu_take(@intFromPtr(p));\n}\n// a copy of a payload Volt lent: text, a slice, what a pointer points at\nfn vu_copy(v: anytype) @TypeOf(v) {\n    switch (@typeInfo(@TypeOf(v))) {\n        .optional => return if (v) |x| vu_copy(x) else null,\n        .pointer => |q| switch (q.size) {\n            .slice => return if (v.len == 0) v else alloc.dupe(q.child, v) catch @panic(\"out of memory\"),\n            .one => {\n                const c = alloc.create(q.child) catch @panic(\"out of memory\");\n                c.* = v.*;\n                return c;\n            },\n            else => return v,\n        },\n        else => return v,\n    }\n}\n// the marked field's payload freed: a copy, or one with a deinit\nfn vu_free(comptime T: type, p: *T) void {\n    const i = vu_take(@intFromPtr(p));\n    if (i == 0) return;\n    const u = @typeInfo(T).@\"union\";\n    inline for (u.field_names, u.field_types, 1..) |name, ty, k| {\n        if (k == i) vu_drop(ty, &@field(p.*, name));\n    }\n}\nfn vu_drop(comptime F: type, x: *F) void {\n    switch (@typeInfo(F)) {\n        .optional => |o| if (x.*) |*y| vu_drop(o.child, y),\n        .pointer => |q| switch (q.size) {\n            .slice => if (x.*.len != 0) alloc.free(x.*),\n            .one => alloc.destroy(x.*),\n            else => {},\n        },\n        .@\"struct\", .@\"union\", .@\"enum\" => if (@hasDecl(F, \"deinit\")) {\n            if (@typeInfo(@TypeOf(F.deinit)).@\"fn\".param_types.len == 2) x.deinit(alloc) else x.deinit();\n        },\n        else => {},\n    }\n}\n// a set: the payload Volt marked before freed, the new field marked\nfn vu_set(comptime T: type, p: *T, i: u16, v: T) void {\n    vu_free(T, p);\n    p.* = v;\n    vu_put(@intFromPtr(p), i);\n}\n// a clone of a marked union: its payload copied, the clone marked\nfn vu_clone(comptime T: type, p: *T, q: *T) void {\n    const i = vu_get(@intFromPtr(p));\n    if (i == 0) return;\n    const u = @typeInfo(T).@\"union\";\n    inline for (u.field_names, 1..) |name, k| {\n        if (k == i) @field(q.*, name) = vu_copy(@field(p.*, name));\n    }\n    vu_put(@intFromPtr(q), i);\n}\n\n");
         let _ = writeln!(s, "export fn {}(p: ?[*]u8, n: usize) void {{\n    if (p) |q| alloc.free(q[0..n]);\n}}\n", free("bytes"));
         for x in &g.vec_elems {
             let _ = writeln!(s, "export fn {}(p: ?[*]{x}, n: usize) void {{\n    if (p) |q| alloc.free(q[0..n]);\n}}\n", free(&format!("{x}s")));
@@ -1400,11 +1422,10 @@ mod tests {
 
     #[test]
     fn import_zig_union_payloads() {
-        // a payload Volt would only lend (text, a slice, a pointer): a tagged union's maker copies
-        // it (not a pointer to an opaque type), a bare union has no maker or setter; one that frees
-        // what it holds: a tagged union's as_ read lends it, no bare union's reads, maker or setter
-        // (it never frees it), and a tagged union holding one can't be copied; a variadic extern is
-        // left out
+        // a payload Volt would only lend (text, a slice, a pointer): makers and setters copy it (not
+        // a pointer to an opaque type), marking the union its owner; one that frees what it holds:
+        // reads lend it, a bare union's maker and setter mark it (the drop frees the field Volt
+        // set), and a union holding one can't be copied; a variadic extern is left out
         let src = "pub const Ctx = opaque {};\npub const Holder = struct { x: i32, pub fn deinit(self: *Holder) void { _ = self; } };\npub const N = union(enum) { name: []const u8, p: *Ctx, n: i32 };\npub const B = union { s: []const u8, h: Holder };\npub const T = union(enum) { h: Holder, none };\npub extern \"c\" fn c_var(a: i32, ...) i32;\n";
         let dir = std::env::temp_dir().join(format!("volt-zig-union-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1416,13 +1437,17 @@ mod tests {
         let m = w.model();
         let names = |t: &str| m.methods[t].iter().map(|s| s.name.clone()).collect::<Vec<_>>();
         assert_eq!(names("N"), ["name", "as_name", "as_p", "n", "as_n", "tag"]);
-        assert_eq!(names("B"), ["s"]);
+        assert_eq!(names("B"), ["s", "s", "set_s", "h", "h", "set_h"]);
+        let b = &m.methods["B"];
+        assert_eq!(b[2].call.as_deref(), Some("=vu_set($T, $r, 1, @unionInit($T, \"s\", vu_copy($0)))"));
+        assert_eq!((b[4].ret.clone(), b[4].call.as_deref()), (Some(Ty::Ref(Box::new(Ty::Named("Holder".into())), true)), Some("=&$r.h")));
+        assert!(m.types.iter().find(|t| t.name == "B").is_some_and(|t| !t.clone && t.opaque));
         assert_eq!(names("T"), ["h", "as_h", "none", "tag"]);
         let as_h = m.methods["T"].iter().find(|s| s.name == "as_h").unwrap();
         assert_eq!(as_h.ret, Some(Ty::Opt(Box::new(Ty::Ref(Box::new(Ty::Named("Holder".into())), true)))));
         let t = m.types.iter().find(|t| t.name == "T").unwrap();
         assert!(!t.clone && t.opaque);
-        for why in ["N::p (its pointer payload is to a value Volt can't copy)", "B::set_s (its payload would borrow what Volt passes)", "B::h (it would copy a value that frees what it holds)", "B::set_h (a bare union never frees its payload)", "c_var (an extern fn with a variadic parameter (...))"] {
+        for why in ["N::p (its pointer payload is to a value Volt can't copy)", "c_var (an extern fn with a variadic parameter (...))"] {
             assert!(m.left_out.iter().any(|l| l == why), "{why}: {:?}", m.left_out);
         }
     }

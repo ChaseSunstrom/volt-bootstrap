@@ -103,6 +103,29 @@ pub fn noteOf(text: bool) Note {
     return if (text) .{ .text = "zig's" } else .none;
 }
 
+// a copy of a union Volt made, handed back: Volt's own union stays the one that frees the copy
+pub fn noteSame(n: Note) Note {
+    return n;
+}
+
+// a bare union whose payloads Volt copies or moves in: Volt remembers the field it set, and the drop
+// (or the next set) frees that one's payload
+pub const Slot = union {
+    text: []const u8,
+    nums: []const i32,
+    buf: Buf,
+    n: i32,
+};
+
+pub fn slotLen(s: *const Slot, which: u8) usize {
+    return switch (which) {
+        0 => s.text.len,
+        1 => s.nums.len,
+        2 => s.buf.data.len,
+        else => @intCast(s.n),
+    };
+}
+
 // an optional payload that frees what it holds: freed too when it's there
 pub const Kept = union(enum) {
     buf: ?Buf,
