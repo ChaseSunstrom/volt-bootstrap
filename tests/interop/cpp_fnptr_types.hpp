@@ -29,4 +29,11 @@ template <class T> T scale(T x, double (*f)(const Shape &), const Shape &s) { re
 template <class T> double twice(const T &a, double (*f)(const T &)) { return 2 * f(a); }
 template <class T> T small_t(T x, int (*f)(Small)) { return x + (T)f(S1); }
 template <class F> int with_ref(F f) { int x = 4; f(x); return x; }
+// function pointer results of those types (a Volt extern "C" fn of the signature)
+inline double area_of(const Shape &s) { return s.w * s.h; }
+inline double (*pick_area())(const Shape &) { return &area_of; }
+inline int &seen() { static int s = -1; return s; }
+inline void note_mode(Mode m) { seen() = (int)m; }
+inline void (*pick_mode())(Mode) { return &note_mode; }
+inline int mode_seen() { return seen(); }
 }

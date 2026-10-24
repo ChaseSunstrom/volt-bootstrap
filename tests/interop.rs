@@ -2535,7 +2535,7 @@ fn cpp_fnptr_types() {
     // or a reference to a number take a named Volt fn: declared ones as a Volt extern "C" fn of that
     // signature, per-use ones (templates) through volt_fn_as, a deduced F calling it
     let e = Env::new("cpp-fnptr-types");
-    let want = "each 10\nmode 2\nsmall 90\nnext 1\ngrow 3\nbump 5\nbigger 2\nscale 2\ntwice 6\nsmall_t 13\nwith_ref 5\n";
+    let want = "each 10\nmode 2\nsmall 90\nnext 1\ngrow 3\nbump 5\nbigger 2\nscale 2\ntwice 6\nsmall_t 13\nwith_ref 5\npicked 3\nmode seen 1\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_fnptr_types.volt", "--backend", backend]), "voltc run cpp_fnptr_types.volt"), want, "function pointers with classes, enums and references ({backend})");
     }

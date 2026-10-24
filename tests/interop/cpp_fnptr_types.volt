@@ -32,4 +32,9 @@ fn main() -> void {
     std::println("twice {}", cpp::fp::twice<cpp::fp::Shape>(&s, area));
     std::println("small_t {}", cpp::fp::small_t(3, nine));
     std::println("with_ref {}", cpp::fp::with_ref(inc));
+    val pa = cpp::fp::pick_area();
+    std::println("picked {}", pa(&s));
+    val pm = cpp::fp::pick_mode();
+    pm(cpp::fp::Mode::ON);
+    std::println("mode seen {}", cpp::fp::mode_seen());
 }

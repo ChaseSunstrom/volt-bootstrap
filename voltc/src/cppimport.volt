@@ -2788,8 +2788,9 @@ attach fn result(this: cpp_gen&, t: clang::CXType, tparams: std::vec<str>&) -> c
         }
         if (pt.kind == clang::CXType_FunctionProto) {
             // a function pointer: a Volt extern "C" fn, as a parameter's is (fn_ptr_param)
-            // (the narrow types: @cpp<R> spells R's, so no reference, enum or class)
-            val fa = this.fn_ptr_param(written_pointee(t) ?? pt, "", "", canon(t), false) ?? return null;
+            // (its types as a parameter's: @cpp<R> gives one with a reference, an enum or a class as
+            // void *, cpp_call)
+            val fa = this.fn_ptr_param(written_pointee(t) ?? pt, "", "", canon(t), true) ?? return null;
             return { vty: copy fa.vty };
         }
     }
@@ -9982,9 +9983,17 @@ attach fn cpp_call_as(this: checker&, r: u32, gargs: std::vec<garg>&, args: std:
     if (!class_ret && r != VOID) {
         match (*this.t.get(r)) {
             .FN_PTR(ps, rr, va) => {
-                // a function pointer as the wrapper's result type (a declarator can't be spelled `type name`)
-                val fd = this.cpp_fn_spell(r, "(*)", false) ?? return fail(span, fmt("@cpp: it returns {}, which has no C++ form", this.ty_name(r)));
-                rsp = fmt("VOLT_ID({})", move fd);
+                // a function pointer as the wrapper's result type (a declarator can't be spelled `type name`);
+                // one whose signature has a reference, an enum or a class Volt lays out (no C form) as
+                // void *, cast from C++'s pointer: the Volt fn of that signature, called alike (cpp_fn_cast)
+                val fd = this.cpp_fn_spell(r, "(*)", false);
+                if (fd) {
+                    rsp = fmt("VOLT_ID({})", copy fd);
+                } else if (this.cpp_fn_cast(r) != null) {
+                    rsp = S("void *");
+                } else {
+                    return fail(span, fmt("@cpp: it returns {}, which has no C++ form", this.ty_name(r)));
+                }
             },
             default => { rsp = this.cpp_spell(r) ?? return fail(span, fmt("@cpp: it returns {}, which has no C++ form", this.ty_name(r))); },
         }
