@@ -109,7 +109,9 @@ fn main() -> void {
 
 Everything prints: numbers, booleans, text, arrays and slices, tuples, structs (their fields),
 enums (the variant and its payload), optionals, and error unions (`error.NAME` for an error). A
-struct that attaches `as_str(this: T&) -> str` prints as that text, as `std::string` does; a box
+struct that attaches `as_str(this: T&) -> str` prints as that text, as `std::string` does, and one
+that attaches `to_string(this: T&)` giving a string prints that string (deleted after: a Rust type's
+`Display` comes through it); a box
 prints the value it holds, and a `fn` value `<fn>`. Other structs print their fields, a `std::vec`
 too: print `v.items()` for its elements. A float prints as the shortest text that reads back as
 the same value (`0.1`, not `0.10000000000000001`, and `2` for `2.0`), with an exponent when it's
