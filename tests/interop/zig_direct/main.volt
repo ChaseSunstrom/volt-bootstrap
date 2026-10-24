@@ -44,7 +44,7 @@ fn kinds() -> void {
     }
 
     // an extern fn: the C symbol, linked from impl.zig
-    std::println("extern {}", kd::zig_ext_add(2, 3));
+    std::println("extern {} {}", kd::zig_ext_add(2, 3), kd::zig_ext_win(4));
 }
 
 fn run() -> fm::zig_error!void {

@@ -135,6 +135,11 @@ pub fn ctxList(cs: []*Ctx) usize {
 pub extern "c" fn zig_ext_add(a: i32, b: i32) i32;
 // (with a pointer to an opaque type: called through the shim)
 pub extern "c" fn zig_ext_total(c: *const Ctx) i32;
-// left out: a slice isn't C's, and neither is the naked calling convention
+// a platform's calling convention (Windows x64's on x86_64, C's elsewhere): through the shim
+pub const win_cc: std.builtin.CallingConvention = if (@import("builtin").cpu.arch == .x86_64) .{ .x86_64_win = .{} } else .c;
+pub extern fn zig_ext_win(a: i32) callconv(win_cc) i32;
+// left out: a slice isn't C's (Zig refuses it in a C fn), Zig's own convention can't be exported
+// for it to link, and a naked fn can't be called
 pub extern "c" fn zig_ext_len(s: []const u8) usize;
+pub extern fn zig_ext_auto(a: i32) callconv(.auto) i32;
 pub extern fn zig_ext_naked() callconv(.naked) void;

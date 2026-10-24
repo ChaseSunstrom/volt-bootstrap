@@ -20,7 +20,8 @@
 //   reads, a bare union's f() reads and set_f(v)
 //   an opaque type -> a handle Volt borrows from pointers to it (never freed by Volt)
 //   an extern fn of C's calling convention -> Volt's extern "C" fn when its types are numbers, else
-//   through the shim when they're pointers to opaque types or extern structs
+//   through the shim when they're pointers to opaque types or extern structs, or its convention is
+//   a platform's (Zig's own and uncallable ones are left out)
 use super::glue::{ident, number, prim, substitute, volt_ty, Gen, Kind, Lang, Model, Recv, ShimOut, ShimParam, Sig, Ty, TypeDef, TypeInfo};
 use super::{arg_path, fresh, save, stamp, Made, Req};
 use crate::foreign::{int_value, lex, toks_line, Cur, Tok};
@@ -115,8 +116,9 @@ struct Walker {
     /// opaque types and extern structs, by name
     opaques: BTreeSet<String>,
     extern_structs: BTreeSet<String>,
-    /// extern fns with C's calling convention: module, the type they're declared in, signature
-    externs: Vec<(Vec<String>, Option<String>, Sig)>,
+    /// extern fns a call can use: module, the type they're declared in, signature, and whether
+    /// the convention is C's (else a platform's, called through the shim)
+    externs: Vec<(Vec<String>, Option<String>, Sig, bool)>,
     /// unions: whether each is tagged, and its fields (payloads)
     unions: BTreeMap<String, (bool, Vec<(String, Option<Ty>)>)>,
 }
@@ -172,14 +174,14 @@ impl Walker {
             Some(Ty::Opt(x)) => matches!(&**x, Ty::Ref(x, _) if matches!(&**x, Ty::Named(n) if self.opaques.contains(n) || self.extern_structs.contains(n))),
             _ => false,
         };
-        for (module, owner, s) in &self.externs {
+        for (module, owner, s, c_cc) in &self.externs {
             if let Some(why) = s.skip {
                 m.left_out.push(format!("{} (an extern fn with {why})", s.name));
             } else if !s.params.iter().all(|p| c_ty(&p.1, false)) {
                 m.left_out.push(format!("{} (an extern fn with a parameter of a type C doesn't have)", s.name));
             } else if !c_ty(&s.ret, true) {
                 m.left_out.push(format!("{} (an extern fn with a result of a type C doesn't have)", s.name));
-            } else if owner.is_none() && super::volt_name(&s.name) == s.name && s.params.iter().all(|p| matches!(p.1, Some(Ty::Prim(_)))) {
+            } else if *c_cc && owner.is_none() && super::volt_name(&s.name) == s.name && s.params.iter().all(|p| matches!(p.1, Some(Ty::Prim(_)))) {
                 let ps: Vec<String> = s.params.iter().map(|(n, t)| format!("{}: {}", super::volt_name(n), if let Some(Ty::Prim(x)) = t { x } else { "" })).collect();
                 let ret = if let Some(Ty::Prim(x)) = s.ret { x } else { "void" };
                 m.externs.push((module.clone(), format!("// Zig: {}\nextern \"C\" fn {}({}) -> {ret};\n", s.src, s.name, ps.join(", "))));
@@ -241,17 +243,26 @@ impl Walker {
                         Some(Tok::Id(n)) => n.clone(),
                         _ => String::new(),
                     };
-                    // an extern fn: C's calling convention unless it says another
+                    // an extern fn: C's calling convention unless it says another (.name, or an
+                    // expression: a platform's, which the shim calls)
                     let cc = head.iter().position(|x| *x == Tok::Id("callconv".into())).map(|i| &head[(i + 2).min(head.len())..]);
-                    let c_cc = cc.is_none_or(|r| matches!(r, [Tok::P(d), Tok::Id(c), Tok::P(e), ..] if d == "." && (c == "C" || c == "c") && e == ")"));
+                    let cc_name = cc.map(|r| match r {
+                        [Tok::P(d), Tok::Id(c), Tok::P(e), ..] if d == "." && e == ")" => c.trim_start_matches('@').trim_matches('"').to_string(),
+                        _ => String::new(),
+                    });
+                    let c_cc = cc_name.as_deref().is_none_or(|c| c == "c" || c == "C");
+                    // Zig's own can't be exported for the symbol to exist; these can't be called
+                    let uncallable = cc_name.as_deref().is_some_and(|c| matches!(c, "naked" | "Naked" | "inline" | "Inline" | "async" | "Async") || c.contains("interrupt") || c.contains("signal"));
                     if !t[start..s].contains(&Tok::Id("extern".into())) {
                         self.m.left_out.push(format!("{name} (a declaration without a body{})", if qualified { ", defined elsewhere" } else { "" }));
-                    } else if !c_cc {
-                        self.m.left_out.push(format!("{name} (an extern fn with a calling convention other than C's)"));
+                    } else if matches!(cc_name.as_deref(), Some("auto" | "Unspecified")) {
+                        self.m.left_out.push(format!("{name} (an extern fn with Zig's own calling convention: nothing can export one for it to link)"));
+                    } else if uncallable {
+                        self.m.left_out.push(format!("{name} (an extern fn with a calling convention a call can't use)"));
                     } else {
                         let mut sig = sig_in(head, owner, gens);
                         sig.src = format!("pub extern {}", toks_line(head));
-                        self.externs.push((module.to_vec(), owner.map(String::from), sig));
+                        self.externs.push((module.to_vec(), owner.map(String::from), sig, c_cc));
                     }
                 } else if public && owner.is_none() && matches!(head.last(), Some(Tok::Id(x)) if x == "type") {
                     // fn Name(comptime T: type) type { ... return struct { ... }; }: a generic type
@@ -1300,7 +1311,7 @@ mod tests {
 
     #[test]
     fn import_zig_left_out() {
-        let src = "pub const Flags = packed struct(u8) { a: bool = false, b: u3, c: i7 };\npub const U = union { a: i32, b: f32 };\npub const S = union(enum) { a: i32, none, pub fn f(self: S) i32 { return 0; } };\npub const Ctx = opaque {};\npub extern fn c_side(x: i32) i32;\npub extern \"c\" fn c_ctx(c: ?*Ctx) *const Ctx;\npub extern \"c\" fn c_len(s: []const u8) usize;\npub extern fn c_naked() callconv(.naked) void;\npub fn ok() void {}\n";
+        let src = "pub const Flags = packed struct(u8) { a: bool = false, b: u3, c: i7 };\npub const U = union { a: i32, b: f32 };\npub const S = union(enum) { a: i32, none, pub fn f(self: S) i32 { return 0; } };\npub const Ctx = opaque {};\npub extern fn c_side(x: i32) i32;\npub extern \"c\" fn c_ctx(c: ?*Ctx) *const Ctx;\npub extern \"c\" fn c_len(s: []const u8) usize;\npub extern fn c_naked() callconv(.naked) void;\npub extern fn z_auto(x: i32) callconv(.auto) i32;\npub extern fn c_std(x: i32) callconv(.stdcall) i32;\npub fn ok() void {}\n";
         let dir = std::env::temp_dir().join(format!("volt-zig-left-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("m.zig");
@@ -1316,9 +1327,10 @@ mod tests {
         let names = |t: &str| m.methods[t].iter().map(|s| s.name.clone()).collect::<Vec<_>>();
         assert_eq!(names("U"), ["a", "a", "set_a", "b", "b", "set_b"]);
         assert_eq!(names("S"), ["a", "as_a", "none", "tag", "f"]);
-        assert_eq!(m.fns.iter().map(|f| f.1.name.as_str()).collect::<Vec<_>>(), ["ok", "c_ctx"]);
+        // (a platform's convention: through the shim)
+        assert_eq!(m.fns.iter().map(|f| f.1.name.as_str()).collect::<Vec<_>>(), ["ok", "c_ctx", "c_std"]);
         assert_eq!(m.externs, [(vec![], "// Zig: pub extern fn c_side(x: i32) i32\nextern \"C\" fn c_side(x: i32) -> i32;\n".to_string())]);
-        assert_eq!(m.left_out, ["c_naked (an extern fn with a calling convention other than C's)", "c_len (an extern fn with a parameter of a type C doesn't have)"]);
+        assert_eq!(m.left_out, ["c_naked (an extern fn with a calling convention a call can't use)", "z_auto (an extern fn with Zig's own calling convention: nothing can export one for it to link)", "c_len (an extern fn with a parameter of a type C doesn't have)"]);
         assert_eq!(odd_int("u24"), Some("u32"));
         assert_eq!(odd_int("u0"), None);
         assert_eq!(ty("c_longlong"), Some(Ty::Prim("i64")));

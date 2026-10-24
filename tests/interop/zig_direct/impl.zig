@@ -9,6 +9,10 @@ export fn zig_ext_total(c: *const kinds.Ctx) i32 {
     return kinds.ctxTotal(c) * 10;
 }
 
+export fn zig_ext_win(a: i32) callconv(kinds.win_cc) i32 {
+    return a * 3;
+}
+
 pub fn twice(x: i32) i32 {
     return x * 2;
 }

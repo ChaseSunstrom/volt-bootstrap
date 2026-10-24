@@ -190,15 +190,17 @@ fn main() -> !void {
 | `opaque {}` | a handle Volt borrows: `*T`, `*const T` and `?*T` results give one and `*T` parameters take one, and Volt never frees it (Zig's functions do; using it after that is the same mistake as in C) |
 | an `enum` | a Volt enum with the same values |
 | `pub extern fn` (`extern "c"`, `callconv(.c)`) of numbers and `bool`s | an `extern "C" fn` of the same C symbol, with no shim between: the program links whatever provides it (another imported `.zig` file's `export fn`, a C library) |
-| `pub extern fn` taking or giving pointers to opaque types or `extern struct`s | a `fn`, through the shim |
+| `pub extern fn` taking or giving pointers to opaque types or `extern struct`s, or with a platform's calling convention (`callconv(.{ .x86_64_win = .{} })`, `.stdcall`, a const naming one) | a `fn`, through the shim |
 | `pub const` of a number, `bool` or string | a `val` |
 
 Generic functions and types get an instance per one a program uses: a call to
 `fm::largest(xs[..])`, `fm::times<3>(7)` or a use of `fm::Stack<u8>` has bolt add that instance and
 zig build it, as with Rust's generics above. One zig rejects is an error at the call,
 with zig's reason (`fm::biggerOf("a", "b")`: operator > not allowed for type '[]const u8'). bolt
-reads `$ZIG` for the compiler, else `zig` on the PATH. An `extern fn` with a calling convention
-other than C's or a type C doesn't have (a slice, an error union), a pointer to a pointer, a slice
+reads `$ZIG` for the compiler, else `zig` on the PATH. An `extern fn` with Zig's own calling
+convention (`.auto`: Zig can't export one, so nothing links it), one a call can't use (`.naked`,
+an interrupt's), or a type C doesn't have (a slice, an error union: Zig refuses them in a C
+function), a pointer to a pointer, a slice
 of an opaque type's pointers, and a function with a type the table doesn't have are left out,
 listed with the reason in a comment of the generated declarations (a variadic `extern fn` too).
 `c_long` and `c_ulong` are 64 bits, or 32 on Windows, as C's are; bolt builds the shim for the
