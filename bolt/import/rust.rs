@@ -373,6 +373,12 @@ fn rust_ty(t: &Ty, lib: &str, types: &BTreeMap<String, Vec<String>>) -> String {
         Ty::String => "String".into(),
         Ty::Vec(e) => format!("Vec<{}>", rust_ty(e, lib, types)),
         Ty::Opt(e) => format!("Option<{}>", rust_ty(e, lib, types)),
+        Ty::Array(e, n) => format!("[{}; {n}]", rust_ty(e, lib, types)),
+        Ty::Tuple(es) => {
+            let a: Vec<String> = es.iter().map(|(_, e)| rust_ty(e, lib, types)).collect();
+            format!("({}{})", a.join(", "), if a.len() == 1 { "," } else { "" })
+        }
+        Ty::Inst(n, args) => format!("{}<{}>", rust_ty(&Ty::Named(n.clone()), lib, types), args.iter().map(|a| rust_ty(a, lib, types)).collect::<Vec<_>>().join(", ")),
         Ty::Named(n) => {
             let mut p = vec![lib.to_string()];
             p.extend(types.get(n).cloned().unwrap_or_default());
@@ -1374,6 +1380,9 @@ fn mangle_ty(t: &Ty) -> String {
         Ty::Named(n) => n.clone(),
         Ty::Vec(e) => format!("vec_{}", mangle_ty(e)),
         Ty::Opt(e) => format!("opt_{}", mangle_ty(e)),
+        Ty::Array(e, n) => format!("arr{n}_{}", mangle_ty(e)),
+        Ty::Tuple(es) => format!("tup{}_{}", es.len(), es.iter().map(|(_, e)| mangle_ty(e)).collect::<Vec<_>>().join("_")),
+        Ty::Inst(n, args) => format!("{n}_of{}_{}", args.len(), args.iter().map(mangle_ty).collect::<Vec<_>>().join("_")),
         _ => "x".into(),
     }
 }

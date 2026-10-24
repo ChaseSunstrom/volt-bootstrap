@@ -687,7 +687,8 @@ pub fn negate(x: i128) -> i128 {
 constant_fn!(made_by_macro, 7);
 
 // left out without failing the import: a const of a struct type (Volt's types can't attach the
-// trait), an instance whose type argument the shim can't spell, a dyn of one
+// trait); a tuple as the type argument attaches (Convert<(i32, i32)>, a dyn of Source<Item = (i32,
+// i32)>) with next_item's Option of a tuple
 pub trait Anchored {
     const START: Pair;
     fn anchor(&self) -> i32;
@@ -711,7 +712,7 @@ pub struct Pairs;
 impl Source for Pairs {
     type Item = (i32, i32);
     fn next_item(&mut self) -> Option<(i32, i32)> {
-        None
+        Some((2, 3))
     }
 }
 

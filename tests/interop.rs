@@ -1143,7 +1143,9 @@ fn rust_direct() {
     c.args(["check", "more.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std")).env("VOLT_SHOW_IMPORT", "1");
     tools(&mut c);
     let shown = String::from_utf8_lossy(&c.output().unwrap().stderr).to_string();
-    for what in ["Anchored::START (a const of a type Volt can't name)", "Countdown's Convert (its type arguments)", "Pairs's Source (its type arguments)", "pairs ("] {
+    // (a tuple as a trait's type argument attaches: Convert<(i32, i32)>, Pairs's Source and pairs'
+    // dyn_Source_tup2_i32_i32)
+    for what in ["Anchored::START (a const of a type Volt can't name)"] {
         assert!(shown.contains(what), "left out, with why: {what}\n{shown}");
     }
     // rustdoc unable to write its JSON: the crate is read from rustc's expanded source, so what a

@@ -35,8 +35,11 @@ fn main() -> void {
     val text: std::string = e.convert();
     std::println("convert {} {}", half, text);
     val pair: (i32, bool) = e.convert();
-    val arr: i32[2] = e.convert();
+    val arr: std::vec<i32> = e.convert();
     std::println("convert {} {} {} {}", pair.0, pair.1, arr[0], arr[1]);
+    var ps = geom::pairs();
+    val (pa, pb) = ps.next_item() ?? (0, 0);
+    std::println("pairs {} {}", pa, pb);
     std::println("super {} {}", e.greet(), e.name());
     std::println("const {} {}", geom::Countdown::CAP(), e.used());
     std::println("macro {}", geom::made_by_macro());
@@ -73,6 +76,7 @@ fn main() -> void {
 // expect: source 3 3 10
 // expect: convert 2.5 n=5
 // expect: convert 10 true 5 -5
+// expect: pairs 2 3
 // expect: super hello from countdown countdown
 // expect: const 10 5
 // expect: macro 7

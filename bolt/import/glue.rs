@@ -911,7 +911,7 @@ impl<'a> Gen<'a> {
                 t
             }
             Ty::Opt(inner) => {
-                if matches!(**inner, Ty::Opt(_) | Ty::Res(_) | Ty::Unit | Ty::Tuple(_)) {
+                if matches!(**inner, Ty::Opt(_) | Ty::Res(_) | Ty::Unit) {
                     return None;
                 }
                 let x = self.volt_out(inner, o)?;
