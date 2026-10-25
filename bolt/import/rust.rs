@@ -364,12 +364,22 @@ fn instances(m: &mut Model, lines: &[String], alias: &str, lib: &str, skip: &BTr
     made
 }
 
-/// a map's key or value, or a set's element, as Volt hands it over (coll_elem in glue.rs): the
-/// extern pointer to an array of them, and Rust's value from one ($w: a reference to it)
-fn coll_in(t: &Ty) -> Option<(String, String)> {
+/// a map's key or value, or a set's element, as Volt hands it over (Gen's coll_elem): the extern
+/// pointer to an array of them, and Rust's value from one ($w: a reference to it); a plain struct's
+/// mirror, an enum's tag
+fn coll_in(g: &Gen, t: &Ty) -> Option<(String, String)> {
     Some(match t {
         Ty::Prim(x) => (format!("*const {x}"), "*$w".into()),
         Ty::String => ("*const VoltStr".into(), "s($w.p, $w.n).to_string()".into()),
+        Ty::Named(_) => {
+            let ti = g.info(t)?;
+            let mg = Gen::mangle(&ti.def);
+            match ti.kind {
+                Kind::Plain => (format!("*const V_{mg}"), format!("from_{mg}($w)")),
+                Kind::Enum => ("*const i64".into(), format!("from_{mg}(*$w)")),
+                Kind::Handle => return None,
+            }
+        }
         _ => return None,
     })
 }
@@ -2085,13 +2095,13 @@ impl Lang for Rust {
                 };
                 let made = match inner {
                     Ty::Map(k, v) => {
-                        let (kp, kc) = coll_in(k)?;
-                        let (vp, vc) = coll_in(v)?;
+                        let (kp, kc) = coll_in(g, k)?;
+                        let (vp, vc) = coll_in(g, v)?;
                         p.params.extend([format!("{a}_k: {kp}"), format!("{a}_v: {vp}"), format!("{a}_n: usize")]);
                         format!("sl({a}_k, {a}_n).iter().zip(sl({a}_v, {a}_n).iter()).map(|(k, v)| ({}, {})).collect()", kc.replace("$w", "k"), vc.replace("$w", "v"))
                     }
                     Ty::Set(x) => {
-                        let (xp, xc) = coll_in(x)?;
+                        let (xp, xc) = coll_in(g, x)?;
                         p.params.extend([format!("{a}: {xp}"), format!("{a}_n: usize")]);
                         format!("sl({a}, {a}_n).iter().map(|x| {}).collect()", xc.replace("$w", "x"))
                     }

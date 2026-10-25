@@ -641,20 +641,20 @@ impl<'a> Gen<'a> {
             // a map: Volt's, lent; its keys and values in two arrays (numbers as they are, text as
             // strs), which the other side copies into a map of its own
             Ty::Map(k, v) => {
-                let (kt, kpush, kext) = coll_elem(k)?;
-                let (vt, vpush, vext) = coll_elem(v)?;
+                let (kt, kpush, kpt, kext) = self.coll_elem(k, true)?;
+                let (vt, vpush, vpt, vext) = self.coll_elem(v, false)?;
                 p.param = format!("{vn}: std::map<{kt}, {vt}>&");
-                p.pre.push(format!("var {a}_k: std::vec<{}> = {{}};", push_ty(&kt)));
-                p.pre.push(format!("var {a}_v: std::vec<{}> = {{}};", push_ty(&vt)));
+                p.pre.push(format!("var {a}_k: std::vec<{kpt}> = {{}};"));
+                p.pre.push(format!("var {a}_v: std::vec<{vpt}> = {{}};"));
                 p.pre.push(format!("for (e) in {vn}.iter() {{\n        {a}_k.push({}) catch @panic(\"out of memory\");\n        {a}_v.push({}) catch @panic(\"out of memory\");\n    }}", kpush.replace("$e", "e.key"), vpush.replace("$e", "e.value")));
                 p.ext.extend([format!("{a}_k: {kext}"), format!("{a}_v: {vext}"), format!("{a}_n: usize")]);
                 p.args.extend([format!("@cast<{kext}>({a}_k.items().ptr)"), format!("@cast<{vext}>({a}_v.items().ptr)"), format!("{a}_k.len")]);
             }
             // a set: the same, its elements in one array
             Ty::Set(x) => {
-                let (xt, xpush, xext) = coll_elem(x)?;
+                let (xt, xpush, xpt, xext) = self.coll_elem(x, true)?;
                 p.param = format!("{vn}: std::set<{xt}>&");
-                p.pre.push(format!("var {a}_k: std::vec<{}> = {{}};", push_ty(&xt)));
+                p.pre.push(format!("var {a}_k: std::vec<{xpt}> = {{}};"));
                 p.pre.push(format!("for (x) in {vn}.iter() {{\n        {a}_k.push({}) catch @panic(\"out of memory\");\n    }}", xpush.replace("$e", "x")));
                 p.ext.extend([format!("{a}: {xext}"), format!("{a}_n: usize")]);
                 p.args.extend([format!("@cast<{xext}>({a}_k.items().ptr)"), format!("{a}_k.len")]);
@@ -877,6 +877,27 @@ impl<'a> Gen<'a> {
     }
 
     /// a returned value's Volt side (its out parameters are named o...)
+    /// a map's key or value, or a set's element, as Volt holds it: its Volt type, what's pushed for
+    /// it ($e: a reference to it, or a pointer for a set's), the pushed type, and the extern pointer
+    /// to an array of those: numbers as they are, text as strs, and (a map's value, not hashed) the
+    /// import's plain structs as copies and enums as their tags
+    fn coll_elem(&self, t: &Ty, hashed: bool) -> Option<(String, String, String, String)> {
+        Some(match t {
+            Ty::Prim(x) => (x.to_string(), "*$e".into(), x.to_string(), format!("{x}*")),
+            Ty::String => ("std::string".into(), "$e.as_str()".into(), "str".into(), "void*".into()),
+            Ty::Named(_) if !hashed => {
+                let ti = self.info(t)?;
+                let vp = self.volt_path(&ti.def);
+                match ti.kind {
+                    Kind::Plain => (vp.clone(), "*$e".into(), vp.clone(), format!("{vp}*")),
+                    Kind::Enum => (vp, format!("{}::tag_{}(*$e)", self.shim_ns(), Self::mangle(&ti.def)), "i64".into(), "i64*".into()),
+                    Kind::Handle => return None,
+                }
+            }
+            _ => return None,
+        })
+    }
+
     /// map_of and set_of (once): a Volt map from its keys and values, a set from its elements
     fn coll_helpers(&mut self) {
         if self.colls {
@@ -897,8 +918,8 @@ impl<'a> Gen<'a> {
             }
             // a map: its keys and values as two lists (as a Vec's), made into a Volt map
             Ty::Map(k, v) => {
-                coll_elem(k)?;
-                coll_elem(v)?;
+                self.coll_elem(k, true)?;
+                self.coll_elem(v, false)?;
                 let ko = self.volt_out(&Ty::Vec(k.clone()), &format!("{o}k"))?;
                 let vo = self.volt_out(&Ty::Vec(v.clone()), &format!("{o}v"))?;
                 self.coll_helpers();
@@ -907,7 +928,7 @@ impl<'a> Gen<'a> {
                 VoltOut { ext: [ko.ext, vo.ext].concat(), locals: [ko.locals, vo.locals].concat(), args: [ko.args, vo.args].concat(), value: format!("{ns}::map_of({}, {})", ko.value, vo.value), ty }
             }
             Ty::Set(x) => {
-                coll_elem(x)?;
+                self.coll_elem(x, true)?;
                 let xo = self.volt_out(&Ty::Vec(x.clone()), &format!("{o}k"))?;
                 self.coll_helpers();
                 let el = xo.ty.strip_prefix("std::vec<").and_then(|y| y.strip_suffix('>')).unwrap_or(&xo.ty).to_string();
@@ -2530,22 +2551,6 @@ fn fails_of(m: &Model) -> BTreeSet<String> {
         }
     }
     out
-}
-
-/// a map's key or value, or a set's element, as Volt holds it: its Volt type, what's pushed for it
-/// ($e: a reference to it, or a pointer for a set's), and the extern pointer to an array of those
-/// (numbers as they are, text as strs)
-fn coll_elem(t: &Ty) -> Option<(String, String, String)> {
-    Some(match t {
-        Ty::Prim(x) => (x.to_string(), "*$e".into(), format!("{x}*")),
-        Ty::String => ("std::string".into(), "$e.as_str()".into(), "void*".into()),
-        _ => return None,
-    })
-}
-
-/// what an element pushes as (coll_elem): a std::string's text as a str
-fn push_ty(t: &str) -> &str {
-    if t == "std::string" { "str" } else { t }
 }
 
 /// whether a type mentions type parameter g

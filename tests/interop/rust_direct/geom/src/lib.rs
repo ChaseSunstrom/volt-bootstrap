@@ -1084,3 +1084,15 @@ pub fn bump_ptr(p: *mut i32) {
 pub fn describe_opt(c: Option<Color>, p: Option<Point>) -> String {
     format!("{c:?} {p:?}")
 }
+
+// a map's values of the crate's struct and enum
+pub fn places() -> std::collections::HashMap<String, Point> {
+    let mut m = std::collections::HashMap::new();
+    m.insert("home".to_string(), Point::new(1.0, 2.0));
+    m.insert("work".to_string(), Point::new(3.0, 4.0));
+    m
+}
+
+pub fn paint(m: &std::collections::BTreeMap<i32, Color>) -> String {
+    m.iter().map(|(k, c)| format!("{k}:{c:?}")).collect::<Vec<_>>().join(",")
+}

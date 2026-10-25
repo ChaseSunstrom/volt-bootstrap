@@ -58,7 +58,7 @@ which an editor's hover shows; Zig's and Go's do too.
 | `&str`, `String` | `str` in, `std::string` out (a copy) |
 | `&[T]`, `&mut [T]`, `Vec<T>` | `T[..]` in, `std::vec<T>` out; `&[&str]`, `Vec<String>`: `str[..]`, `std::vec<std::string>` |
 | `Option<T>` | `T?` |
-| `HashMap<K, V>`, `BTreeMap<K, V>` (by value or `&`), `K` and `V` numbers or `String` | `std::map<K, V>&` in (lent: Rust gets a map made from its entries), `std::map<K, V>` out (a copy) |
+| `HashMap<K, V>`, `BTreeMap<K, V>` (by value or `&`), `K` a number or `String`, `V` one too or the crate's plain struct or fieldless enum | `std::map<K, V>&` in (lent: Rust gets a map made from its entries), `std::map<K, V>` out (a copy) |
 | `HashSet<T>`, `BTreeSet<T>` (by value or `&`), `T` a number or `String` | `std::set<T>&` in, `std::set<T>` out, copied the same way |
 | `Box<T>` of a type that isn't a trait (a struct, a number, `String`, a `Vec`) | `T` itself: the shim boxes it going in and unboxes it coming out (`geom::unbox(geom::boxed_point(1.5))`) |
 | `*const T`, `*mut T` of a number | `T*`: the same address (`val p: i32* = &n; geom::bump_ptr(p);`) |

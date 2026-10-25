@@ -28,9 +28,16 @@ fn main() -> void {
     val np: i32* = &n;
     geom::bump_ptr(np);
     std::println("ptr {} {}", geom::read_ptr(np), n);
+    var pl = geom::places();
+    val home = pl.get(std::string::from("home")) ?? @panic("no home");
+    var cs: std::map<i32, geom::Color> = {};
+    cs.put(2, geom::Color::Green);
+    cs.put(1, geom::Color::Red);
+    std::println("places {} {} {} {}", pl.len, home.x, home.y, geom::paint(&cs));
 }
 // expect: maps 3 5 3
 // expect: scaled 3 4
 // expect: sets 2 true rv
 // expect: box 1.5 3 4.5
 // expect: ptr 42 42
+// expect: places 2 1 2 1:Red,2:Green
