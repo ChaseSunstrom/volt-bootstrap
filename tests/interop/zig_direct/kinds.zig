@@ -326,3 +326,31 @@ pub fn wordLens(allocator: std.mem.Allocator, text: []const u8) std.StringHashMa
 pub fn lenOf(m: *const std.StringHashMap(usize), w: []const u8) usize {
     return m.get(w) orelse 0;
 }
+
+// fn pointers: Volt fn values, called while the call runs; maps the call changes
+pub fn applyTwice(f: *const fn (i32) i32, x: i32) i32 {
+    return f(f(x));
+}
+
+pub fn countWhere(xs: []const i32, keep: *const fn (x: i32) bool) usize {
+    var n: usize = 0;
+    for (xs) |x| {
+        if (keep(x)) n += 1;
+    }
+    return n;
+}
+
+pub fn eachWord(text: []const u8, f: *const fn ([]const u8) void) void {
+    var it = std.mem.tokenizeScalar(u8, text, ' ');
+    while (it.next()) |w| f(w);
+}
+
+pub fn bumpKey(m: *std.AutoHashMap(u32, u64), k: u32) void {
+    const g = m.getOrPut(k) catch @panic("out of memory");
+    if (!g.found_existing) g.value_ptr.* = 0;
+    g.value_ptr.* += 1;
+}
+
+pub fn tagWord(m: *std.StringHashMap(usize), w: []const u8) void {
+    m.put(w, w.len) catch @panic("out of memory");
+}

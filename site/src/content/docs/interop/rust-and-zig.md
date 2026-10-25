@@ -191,7 +191,8 @@ fn main() -> !void {
 | `[*]T`, `[*]const T`, `[*c]T` of a number | `T*`: the same address (`val p: i32* = &xs[0]; kd::fillMany(p, 2, 9);`), which mustn't be null |
 | `struct { A, B }` (a tuple) | a Volt tuple, `(A, B)`, each way (`val (q, r) = kd::divmod(17, 5);`) |
 | `std.ArrayList(T)` of a number | `std::vec<T>` out (a copy of its items; the list is freed when the function was given the allocator); `*const std.ArrayList(T)` is `T[..]` in (`kd::listSum(ev.items())`), and `*std.ArrayList(T)` is `std::vec<T>&` (`kd::pushSquares(&ev, 3)`): Zig gets a list of the vec's items, and the list's items replace the vec's when the call ends |
-| `std.AutoHashMap(K, V)`, `std.StringHashMap(V)` of numbers | `std::map<K, V>` (`std::map<std::string, V>`) out, a copy (freed likewise); `*const` one in, `std::map<K, V>&`: Zig gets a map made from its entries |
+| `std.AutoHashMap(K, V)`, `std.StringHashMap(V)` of numbers | `std::map<K, V>` (`std::map<std::string, V>`) out, a copy (freed likewise); a `*const` one in, `std::map<K, V>&`: Zig gets a map made from its entries; a `*` one the same, its entries replacing Volt's when the call ends (`kd::bumpKey(&sq, 2)`) |
+| `*const fn (A, B) R` (Zig's calling convention) of numbers, `bool`s and `[]const u8`, giving a number, `bool` or `void` | a Volt fn value, lent for the call (`kd::applyTwice(add_step, 10)`): a fn pointer carries no data, so the shim's wrapper finds the closure in a thread-local set for the call, and Zig may call it only while the call runs (one it keeps and calls later stops the program) |
 | `?T` | `T?` |
 | `*T`, `*const T` of a struct | `T&` |
 | `*T`, `*const T` of a number | `T&` (`kd::bumpBy(&n, 3)`): a `*T` is Volt's own, so Zig's change shows; a `*const T` points at a copy |

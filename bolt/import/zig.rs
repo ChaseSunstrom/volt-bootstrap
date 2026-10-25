@@ -22,7 +22,7 @@
 //   an extern fn of C's calling convention -> Volt's extern "C" fn when its types are numbers, else
 //   through the shim when they're pointers to opaque types or extern structs, or its convention is
 //   a platform's (Zig's own and uncallable ones are left out)
-use super::glue::{ident, number, prim, substitute, volt_ty, Gen, Kind, Lang, Model, Recv, ShimOut, ShimParam, Sig, Ty, TypeDef, TypeInfo};
+use super::glue::{ident, number, prim, substitute, volt_ty, FnPass, Gen, Kind, Lang, Model, Recv, ShimOut, ShimParam, Sig, Ty, TypeDef, TypeInfo};
 use super::{arg_path, fresh, save, stamp, Made, Req};
 use crate::foreign::{int_value, lex, toks_line, Cur, Tok};
 use std::collections::{BTreeMap, BTreeSet};
@@ -924,6 +924,23 @@ fn parse_ty_in(t: &[Tok], owner: Option<&str>, gens: &[String]) -> Option<Ty> {
                 [Tok::Id(c), rest @ ..] if c == "const" => (false, rest),
                 _ => (true, rest),
             };
+            if let [Tok::Id(f), Tok::P(a), ..] = rest {
+                if f == "fn" && a == "(" {
+                    let mut c = Cur { t: rest, i: 1 };
+                    c.skip_group();
+                    // (a callconv: the wrapper the shim passes has Zig's)
+                    if mutable || matches!(rest.get(c.i), Some(Tok::Id(cc)) if cc == "callconv") {
+                        return None;
+                    }
+                    let ps = split_commas(&rest[2..c.i - 1]).into_iter().map(|p| {
+                        let p = if p.get(1) == Some(&Tok::P(":".into())) { &p[2..] } else { p };
+                        parse_ty(p, owner).filter(|t| matches!(t, Ty::Prim(_) | Ty::Str))
+                    });
+                    let ps = ps.collect::<Option<Vec<_>>>()?;
+                    let r = parse_ty(&rest[c.i..], owner).filter(|t| matches!(t, Ty::Prim(_) | Ty::Unit))?;
+                    return Some(Ty::Fn(ps, Box::new(r), FnPass::Ref, false));
+                }
+            }
             match parse_ty(rest, owner)? {
                 x @ (Ty::Named(_) | Ty::SelfTy | Ty::Prim(_) | Ty::Vec(_) | Ty::Map(..)) => Some(Ty::Ref(Box::new(x), mutable)),
                 _ => None,
@@ -1177,6 +1194,54 @@ impl Lang for Zig {
                     format!("for (0..{a}_n) |{a}_i| {a}_m.put({key}, {a}_v.?[{a}_i]) catch @panic(\"out of memory\");"),
                 ]);
                 p.arg = format!("&{a}_m");
+            }
+            // a fn pointer: a wrapper fn that calls Volt's closure through Gen's trampoline, the
+            // closure in a threadlocal for the call (saved and restored around it: a nested call
+            // has its own); a bare fn pointer carries no data, so Zig may call it only while the
+            // call runs (after, the wrapper finds none: a null unwrap)
+            Ty::Fn(ps, r, FnPass::Ref, _) => {
+                let (mut zps, mut cps, mut cargs) = (Vec::new(), Vec::new(), Vec::new());
+                for (k, pt) in ps.iter().enumerate() {
+                    match pt {
+                        Ty::Prim(x) => {
+                            zps.push(format!("x{k}: {x}"));
+                            cps.push(x.to_string());
+                            cargs.push(format!("x{k}"));
+                        }
+                        Ty::Str => {
+                            zps.push(format!("x{k}: []const u8"));
+                            cps.extend(["?[*]const u8".to_string(), "usize".to_string()]);
+                            cargs.extend([format!("x{k}.ptr"), format!("x{k}.len")]);
+                        }
+                        _ => return None,
+                    }
+                }
+                let zr = match &**r {
+                    Ty::Unit => "void",
+                    Ty::Prim(x) => x,
+                    _ => return None,
+                };
+                let cps: String = cps.iter().map(|c| format!(", {c}")).collect();
+                let cargs: String = cargs.iter().map(|c| format!(", {c}")).collect();
+                p.params.extend([format!("{a}: ?*const anyopaque"), format!("{a}_env: ?*anyopaque")]);
+                p.pre.extend([
+                    format!("const {a}_W = struct {{\n        threadlocal var vf: ?*const fn (?*anyopaque{cps}) callconv(.c) {zr} = null;\n        threadlocal var venv: ?*anyopaque = null;\n        fn call({}) {zr} {{\n            return vf.?(venv{cargs});\n        }}\n    }};", zps.join(", ")),
+                    format!("const {a}_sf = {a}_W.vf;"),
+                    format!("const {a}_se = {a}_W.venv;"),
+                    format!("defer {{\n        {a}_W.vf = {a}_sf;\n        {a}_W.venv = {a}_se;\n    }}"),
+                    format!("{a}_W.vf = @ptrCast({a});"),
+                    format!("{a}_W.venv = {a}_env;"),
+                ]);
+                p.arg = format!("&{a}_W.call");
+            }
+            // *std.AutoHashMap or *std.StringHashMap: the map *const gets, its entries copied out when
+            // the call ends (before it's freed), as a map result's are
+            Ty::Ref(m, true) if matches!(**m, Ty::Map(..)) => {
+                let mut q = self.param(g, &Ty::Ref(m.clone(), false), a)?;
+                let x = self.out(g, m, &format!("{a}_r"), false)?;
+                q.params.extend(x.params);
+                q.pre.push(format!("defer {}", x.store.replace("$v", &format!("{a}_m"))));
+                return Some(q);
             }
             // *T of a number: Volt's, which the call may change; *const T: its value's copy
             Ty::Ref(x, mutable) if matches!(**x, Ty::Prim(_)) => {
@@ -1611,6 +1676,8 @@ mod tests {
         assert_eq!(ty("std.AutoHashMap(u32, f64)"), Some(Ty::Map(Box::new(Ty::Prim("u32")), Box::new(Ty::Prim("f64")))));
         assert_eq!(ty("*const std.StringHashMap(usize)"), Some(Ty::Ref(Box::new(Ty::Map(Box::new(Ty::String), Box::new(Ty::Prim("usize")))), false)));
         assert_eq!(ty("std.ArrayList([]const u8)"), None);
+        assert_eq!(ty("*const fn (x: i32, []const u8) bool"), Some(Ty::Fn(vec![Ty::Prim("i32"), Ty::Str], Box::new(Ty::Prim("bool")), FnPass::Ref, false)));
+        assert_eq!(ty("*const fn (i32) callconv(.c) void"), None);
         assert_eq!(ty("type"), None);
     }
 

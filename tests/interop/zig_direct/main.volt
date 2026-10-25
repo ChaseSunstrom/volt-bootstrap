@@ -108,6 +108,18 @@ fn kinds() -> void {
     var wl = kd::wordLens("ab cde f");
     val cde = wl.get(std::string::from("cde")) ?? @panic("no cde");
     std::println("zig std {} {} {} {} {} {} {}", ev.len, ev[6], kd::listSum(ev.items()), sq.len, kd::mapTotal(&sq), *cde, kd::lenOf(&wl, "f"));
+    // fn pointers and maps the call changes
+    val step = 3;
+    val arr_big: i32[4] = { 1, 5, 2, 7 };
+    val twice = kd::applyTwice(|step| (x: i32) -> i32 { return x + step; }, 10);
+    val big = kd::countWhere(arr_big[..], |step| (x: i32) -> bool { return x > step; });
+    kd::eachWord("zig calls volt", || (w: str) -> void { std::print("<{}>", w); });
+    kd::bumpKey(&sq, 2);
+    kd::bumpKey(&sq, 20);
+    kd::tagWord(&wl, "longer");
+    val b2 = sq.get(2) ?? @panic("no 2");
+    val lg = wl.get(std::string::from("longer")) ?? @panic("no longer");
+    std::println(" zig fn {} {} {} {} {} {}", twice, big, sq.len, *b2, wl.len, *lg);
 }
 
 fn run() -> fm::zig_error!void {
