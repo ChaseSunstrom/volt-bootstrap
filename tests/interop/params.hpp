@@ -120,6 +120,7 @@ template <class S> int grow(S &s, int n) {
 }
 template <class S> int count_all(const std::vector<S> &v) { return (int)v.size(); }
 template <class S> int deref(S *p) { return (int)p->size(); }
+template <class S> void poke(S *p) { p->append("*"); }
 template <class S> S echo(const S &s) { return s; }
 // an S& / const S& pair: C++ runs S& for a string Volt can change, const S& for one it can't; a
 // forwarding S&& takes a value (a copy changed)

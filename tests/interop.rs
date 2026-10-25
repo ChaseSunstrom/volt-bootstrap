@@ -2324,7 +2324,7 @@ fn cpp_params() {
     // throw through the plain form a stop; a class template's T& and const T& a Volt reference
     // (laid out and held by handle), C++'s write seen
     let e = Env::new("cpp-params");
-    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\narrays 7 4 7 9 4\n@cpp 8 5 1\nalias 8 cells 14\nwrap hey! 4 6\ngauge 40 70 hey!\ntake 5 xyz\ntook 4\nlend 1 1 1 1\nlend moved 2 2\npad 6 hey!##\ntgrow 1: 8 hey!##~+\ntgrow -1: INVALID_ARGUMENT hey!##~+\nwhich 1 2 2 1 2 ab&& cd\nfwd 6 ab&& len 2 4\nnested [[1,2],[3],[]] [[1,2],[3]] [[[1,2],[3],[]],[],[[1,2]]] []\nnested per use [[1,2],[3],[]] 15\nnested [[3],[]] 4.75 hi//you\nmap {1:10,2:20,3:30} {} {4:125,5:50} 140 3 3\nmap {a:1,b:2} {:'',k:'v w'} {1:[],2:[4,5]}\nmap {1:10,2:20,3:30} {1:[],2:[4,5]} 2 2 2\nmap 1 {7:7} 1\npick 2: 20\npick 9: OUT_OF_RANGE\nderef 5 5 3 3 7 7\nsum_ptr 7 size 4 4 8 which 1 2\nchecked 5: 5\nchecked -1: INVALID_ARGUMENT\ntwice 42 tally 4 7 10 10\nkeep 8 11 12\nduo 4.75 which 2 1\nconst pick 2 2 1 1\nstrings 2 3 xab\nmember xyz\nchain abc b\n";
+    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\narrays 7 4 7 9 4\n@cpp 8 5 1\nalias 8 cells 14\nwrap hey! 4 6\ngauge 40 70 hey!\ntake 5 xyz\ntook 4\nnest 3 ptr 2\npoked ptr*\nlend 1 1 1 1\nlend moved 2 2\npad 6 hey!##\ntgrow 1: 8 hey!##~+\ntgrow -1: INVALID_ARGUMENT hey!##~+\nwhich 1 2 2 1 2 ab&& cd\nfwd 6 ab&& len 2 4\nnested [[1,2],[3],[]] [[1,2],[3]] [[[1,2],[3],[]],[],[[1,2]]] []\nnested per use [[1,2],[3],[]] 15\nnested [[3],[]] 4.75 hi//you\nmap {1:10,2:20,3:30} {} {4:125,5:50} 140 3 3\nmap {a:1,b:2} {:'',k:'v w'} {1:[],2:[4,5]}\nmap {1:10,2:20,3:30} {1:[],2:[4,5]} 2 2 2\nmap 1 {7:7} 1\npick 2: 20\npick 9: OUT_OF_RANGE\nderef 5 5 3 3 7 7\nsum_ptr 7 size 4 4 8 which 1 2\nchecked 5: 5\nchecked -1: INVALID_ARGUMENT\ntwice 42 tally 4 7 10 10\nkeep 8 11 12\nduo 4.75 which 2 1\nconst pick 2 2 1 1\nstrings 2 3 xab\nmember xyz\nchain abc b\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_params.volt", "--backend", backend]), "voltc run cpp_params.volt"), want, "C++ parameters ({backend})");
         let o = e.voltc(&["run", "cpp_params_gthrow.volt", "--backend", backend]);
@@ -2852,14 +2852,12 @@ fn cpp_params_refused() {
     assert!(err.contains("its result would point into a copy (of a string, a vector or a map) that's gone once the call returns") && err.contains("cpp_params_temp.volt:7"), "a pointer into a slice's vector, per use: {err}");
     let err = check("cpp_params_struct_view.volt");
     assert!(err.contains("its result would point into a copy (of a string, a vector or a map) that's gone once the call returns") && err.contains("cpp_params_struct_view.volt:7"), "a struct holding a pointer into the copy, per use: {err}");
-    // a Volt std::string for a template parameter nested in another type (S*, std::vector<S>) or
-    // the result, each call
+    // a slice of Volt std::strings for a template's std::vector<S>: an error saying what crosses
+    // (S* and S as the result do)
     let err = check("cpp_params_gnest.volt");
-    let why = "a Volt std::string crosses to C++ only as itself (a template's S, S& or const S&), not inside another type or as a result";
-    for line in ["cpp_params_gnest.volt:8", "cpp_params_gnest.volt:9", "cpp_params_gnest.volt:11"] {
-        assert!(err.contains(line), "{line}: {err}");
-    }
-    assert_eq!(err.matches(why).count(), 3, "S nested or the result: {err}");
+    let why = "a Volt std::string crosses to C++ as itself (a template's S, S&, const S&, S*, or S as the result), not inside another type or as a reference result: for a std::vector<S>, pass a str[..] of the strings' text";
+    assert!(err.contains("cpp_params_gnest.volt:11") && !err.contains("cpp_params_gnest.volt:8") && !err.contains("cpp_params_gnest.volt:9"), "only the slice: {err}");
+    assert_eq!(err.matches(why).count(), 1, "the slice of strings: {err}");
     // a std::string without & for a template's S& or const S&: an error naming the parameter
     let err = check("cpp_params_gbare.volt");
     for (line, f) in [(7, "wrap"), (11, "len")] {

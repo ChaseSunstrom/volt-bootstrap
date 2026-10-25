@@ -1,5 +1,5 @@
-// a Volt std::string crosses a C++ template only as its parameter S (S, S&, const S&): S nested in
-// another type (S*, std::vector<S>) or as the result is an error, each call
+// a slice of Volt std::strings for a C++ template's std::vector<S> is an error (a str[..] of their
+// text crosses: cpp_params.volt); S* and S as the result cross
 use std::io;
 use { "params.hpp" } as cpp;
 fn main() -> void {

@@ -6,5 +6,5 @@ fn main() -> void {
     var s = std::string::from("abc");
     val t = cpp::echo(&s);
 }
-// error: a Volt std::string crosses to C++ only as itself (a template's S, S& or const S&), not inside another type or as a result
+// error: a Volt std::string crosses to C++ as itself (a template's S, S&, const S&, S*, or S as the result), not inside another type or as a reference result: for a std::vector<S>, pass a str[..] of the strings' text
 // error: echo<std::string&> is instantiated here

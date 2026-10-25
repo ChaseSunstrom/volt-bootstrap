@@ -60,6 +60,14 @@ fn main() -> void {
     var tk = std::string::from("xyz");
     std::println("take {} {}", cpp::pr::gs::bump(copy tk), tk);
     std::println("took {}", cpp::pr::gs::take(move tk));
+    // S* a pointer to a copy of the string (written back), S as the result a Volt std::string, and a
+    // str[..] for a std::vector<S>
+    var ps = std::string::from("ptr");
+    val pp: std::string* = &ps;
+    val strs: str[2] = { "a", "bb" };
+    std::println("nest {} {} {}", cpp::pr::gs::deref(pp), cpp::pr::gs::echo(&ps), cpp::pr::gs::count_all(strs[..]));
+    cpp::pr::gs::poke(pp);
+    std::println("poked {}", ps);
     // a const S& beside an S&&: &x calls the const S& one (an i32, a string), the S&& one has its
     // suffixed name
     var ln: i32 = 5;
