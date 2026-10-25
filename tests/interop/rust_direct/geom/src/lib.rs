@@ -1156,3 +1156,20 @@ pub fn add_suit(s: &mut std::collections::BTreeSet<Suit>, x: Suit) -> bool {
 pub fn doubled_cow(xs: std::borrow::Cow<[i32]>) -> std::borrow::Cow<'static, [i32]> {
     std::borrow::Cow::Owned(xs.iter().map(|x| x * 2).collect())
 }
+
+// Rc<T> and Arc<T> of values: the T itself (immutable, so the sharing can't show)
+pub fn shared_point(x: f64) -> std::rc::Rc<Point> {
+    std::rc::Rc::new(Point::new(x, 2.0))
+}
+
+pub fn rc_len(v: std::rc::Rc<Vec<i32>>) -> usize {
+    v.len()
+}
+
+pub fn arc_name(s: &std::sync::Arc<String>) -> usize {
+    s.len()
+}
+
+pub fn arc_nums() -> std::sync::Arc<Vec<i32>> {
+    std::sync::Arc::new(vec![4, 5, 6])
+}

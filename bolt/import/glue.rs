@@ -84,6 +84,9 @@ pub enum Ty {
     Boxed(Box<Ty>),
     /// a raw pointer to a number (Rust's *const T, *mut T): a Volt T*, the same address
     Ptr(Box<Ty>, bool),
+    /// a shared value (Rust's Rc<T>, or Arc<T> when true) of a value type: the T itself, as a
+    /// boxed one is (without interior mutability the sharing can't show)
+    Shared(Box<Ty>, bool),
     /// Rust's Cow<str> or Cow<[T]>: what it holds (borrowed going in, copied coming out)
     Cow(Box<Ty>),
 }
@@ -600,6 +603,7 @@ impl<'a> Gen<'a> {
             Ty::Map(k, v) => Ty::Map(Box::new(self.resolve(*k, self_ty)), Box::new(self.resolve(*v, self_ty))),
             Ty::Set(x) => Ty::Set(Box::new(self.resolve(*x, self_ty))),
             Ty::Boxed(x) => Ty::Boxed(Box::new(self.resolve(*x, self_ty))),
+            Ty::Shared(x, arc) => Ty::Shared(Box::new(self.resolve(*x, self_ty)), arc),
             Ty::Slice(x, m) => Ty::Slice(Box::new(self.resolve(*x, self_ty)), m),
             Ty::Array(x, n) => Ty::Array(Box::new(self.resolve(*x, self_ty)), n),
             Ty::Tuple(es) => Ty::Tuple(es.into_iter().map(|(n, t)| (n, self.resolve(t, self_ty))).collect()),
@@ -630,12 +634,12 @@ impl<'a> Gen<'a> {
         let mut p = VoltParam::default();
         // (a reference to a map or set: lent as the map itself is)
         let t = match t {
-            Ty::Ref(x, false) if matches!(**x, Ty::Map(..) | Ty::Set(_) | Ty::Vec(_)) => &**x,
+            Ty::Ref(x, false) if matches!(**x, Ty::Map(..) | Ty::Set(_) | Ty::Vec(_) | Ty::Shared(..)) => &**x,
             t => t,
         };
         match t {
             // the boxed value itself (the other side boxes it)
-            Ty::Boxed(x) => return self.volt_param_at(name, x, &a, i),
+            Ty::Boxed(x) | Ty::Shared(x, _) => return self.volt_param_at(name, x, &a, i),
             Ty::Cow(x) => return self.volt_param_at(name, x, &a, i),
             // a map or set the call may change (Rust's &mut HashMap): passed as a lent one is, its
             // keys and values (elements) coming back in out lists that replace Volt's when the call
@@ -955,7 +959,7 @@ impl<'a> Gen<'a> {
                 self.find_keys(v);
             }
             Ty::Set(x) => self.key(x),
-            Ty::Opt(x) | Ty::Res(x) | Ty::Vec(x) | Ty::Slice(x, _) | Ty::Ref(x, _) | Ty::Fails(x, _) | Ty::Boxed(x) | Ty::Future(x) => self.find_keys(x),
+            Ty::Opt(x) | Ty::Res(x) | Ty::Vec(x) | Ty::Slice(x, _) | Ty::Ref(x, _) | Ty::Fails(x, _) | Ty::Boxed(x) | Ty::Future(x) | Ty::Shared(x, _) => self.find_keys(x),
             Ty::Tuple(es) => es.iter().for_each(|(_, x)| self.find_keys(x)),
             _ => {}
         }
@@ -986,7 +990,7 @@ impl<'a> Gen<'a> {
         let ns = self.shim_ns();
         Some(match t {
             // the boxed value itself (the other side unboxes it)
-            Ty::Boxed(x) => return self.volt_out(x, o),
+            Ty::Boxed(x) | Ty::Shared(x, _) => return self.volt_out(x, o),
             Ty::Cow(x) => return self.volt_out(x, o),
             Ty::Ptr(x, _) if matches!(**x, Ty::Prim(_)) => {
                 let Ty::Prim(x) = **x else { return None };
@@ -2603,6 +2607,7 @@ pub fn substitute(t: &Ty, s: &BTreeMap<String, Ty>) -> Ty {
         Ty::Map(k, v) => Ty::Map(Box::new(substitute(k, s)), Box::new(substitute(v, s))),
         Ty::Set(e) => Ty::Set(Box::new(substitute(e, s))),
         Ty::Boxed(e) => Ty::Boxed(Box::new(substitute(e, s))),
+        Ty::Shared(e, arc) => Ty::Shared(Box::new(substitute(e, s)), *arc),
         Ty::Ptr(e, m) => Ty::Ptr(Box::new(substitute(e, s)), *m),
         // a closure parameter's type stands for the closure itself
         Ty::Fn(ps, r, p, once) => Ty::Fn(ps.iter().map(|x| substitute(x, s)).collect(), Box::new(substitute(r, s)), *p, *once),
@@ -2644,7 +2649,7 @@ fn fails_of(m: &Model) -> BTreeSet<String> {
 fn mentions(t: &Ty, g: &str) -> bool {
     match t {
         Ty::Generic(x) => x == g,
-        Ty::Opt(x) | Ty::Res(x) | Ty::Vec(x) | Ty::Slice(x, _) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::Fails(x, _) | Ty::Future(x) | Ty::Set(x) | Ty::Boxed(x) | Ty::Ptr(x, _) => mentions(x, g),
+        Ty::Opt(x) | Ty::Res(x) | Ty::Vec(x) | Ty::Slice(x, _) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::Fails(x, _) | Ty::Future(x) | Ty::Set(x) | Ty::Boxed(x) | Ty::Ptr(x, _) | Ty::Shared(x, _) => mentions(x, g),
         Ty::Map(k, v) => mentions(k, g) || mentions(v, g),
         Ty::Tuple(es) => es.iter().any(|(_, t)| mentions(t, g)),
         Ty::Fn(ps, r, _, _) => ps.iter().any(|p| mentions(p, g)) || mentions(r, g),
@@ -2659,7 +2664,7 @@ fn value_use(m: &Model, name: &str) -> bool {
     fn names(t: &Ty, n: &str) -> bool {
         match t {
             Ty::Named(x) => x == n,
-            Ty::Opt(x) | Ty::Res(x) | Ty::Vec(x) | Ty::Slice(x, _) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::Set(x) | Ty::Boxed(x) | Ty::Ptr(x, _) => names(x, n),
+            Ty::Opt(x) | Ty::Res(x) | Ty::Vec(x) | Ty::Slice(x, _) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::Set(x) | Ty::Boxed(x) | Ty::Ptr(x, _) | Ty::Shared(x, _) => names(x, n),
             Ty::Map(k, v) => names(k, n) || names(v, n),
             Ty::Tuple(es) => es.iter().any(|(_, t)| names(t, n)),
             Ty::Fails(x, _) | Ty::Future(x) => names(x, n),

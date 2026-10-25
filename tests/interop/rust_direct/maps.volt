@@ -56,6 +56,10 @@ fn main() -> void {
     val again = geom::add_suit(&ss, geom::Suit::Hearts);
     val dc = geom::doubled_cow(pv.items());
     std::println("written {} {} {} {} {} {} {} {}", pv.len, pv[3], wm.len, xn, ss.len(), first, again, dc[3]);
+    val spt = geom::shared_point(1.5);
+    val ns: i32[2] = { 1, 2 };
+    val an = geom::arc_nums();
+    std::println("shared {} {} {} {} {}", spt.x, geom::rc_len(ns[..]), geom::arc_name("abcd"), an.len, an[2]);
 }
 // expect: maps 3 5 3
 // expect: scaled 3 4
@@ -66,3 +70,4 @@ fn main() -> void {
 // expect: keys 2 3 35 3 true 102
 // expect: cow HI THERE as is
 // expect: written 4 4 2 2 1 true false 8
+// expect: shared 1.5 2 4 3 6

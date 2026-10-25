@@ -364,6 +364,18 @@ fn instances(m: &mut Model, lines: &[String], alias: &str, lib: &str, skip: &BTr
     made
 }
 
+/// what an Rc<T> or Arc<T> may share: values whose out stores read them through a reference
+/// (numbers, chars, String, the crate's plain structs and enums, Vecs of those or of text), not a
+/// handle (one would have to move out of it)
+fn shared_value(g: &Gen, t: &Ty) -> bool {
+    match t {
+        Ty::Prim(_) | Ty::Char | Ty::String => true,
+        Ty::Named(_) => g.info(t).is_some_and(|ti| ti.kind != Kind::Handle),
+        Ty::Vec(e) => matches!(**e, Ty::Prim(_) | Ty::String) || (matches!(**e, Ty::Named(_)) && shared_value(g, e)),
+        _ => false,
+    }
+}
+
 /// a map's key or value, or a set's element, as Volt hands it over (Gen's coll_elem): the extern
 /// pointer to an array of them, and Rust's value from one ($w: a reference to it); a plain struct's
 /// mirror, an enum's tag
@@ -1314,6 +1326,8 @@ impl<'a> Doc<'a> {
                 x @ (Ty::Prim(_) | Ty::Char) if !mutable => Some(x),
                 // a map or set: Volt's copied into a Rust one for the call (a &mut one's written back)
                 x @ (Ty::Map(..) | Ty::Set(_)) => Some(Ty::Ref(Box::new(x), mutable)),
+                // &Rc<T>, &Arc<T>: one made for the call
+                x @ Ty::Shared(..) if !mutable => Some(Ty::Ref(Box::new(x), false)),
                 _ => None,
             };
         }
@@ -1363,6 +1377,8 @@ impl<'a> Doc<'a> {
             ("HashMap" | "BTreeMap", 2) => Some(Ty::Map(one()?, Box::new(self.ty(args[1])?))),
             ("HashSet" | "BTreeSet", 1) => Some(Ty::Set(one()?)),
             ("Box", 1) => Some(Ty::Boxed(one()?)),
+            ("Rc", 1) => Some(Ty::Shared(one()?, false)),
+            ("Arc", 1) => Some(Ty::Shared(one()?, true)),
             // Cow<str> and Cow<[T]> of a number: what it holds
             ("Cow", 1) if args[0].get("primitive").and_then(Json::str) == Some("str") => Some(Ty::Cow(Box::new(Ty::Str))),
             ("Cow", 1) if args[0].get("slice").is_some() => match self.ty(args[0].get("slice")?)? {
@@ -2095,6 +2111,17 @@ impl Lang for Rust {
                 q.arg = format!("Box::new({})", q.arg);
                 return Some(q);
             }
+            // Rc<T> or Arc<T> of a value (&Rc<T>: lent): one made for the call
+            Ty::Shared(x, arc) if shared_value(g, x) => {
+                let mut q = self.param(g, x, a)?;
+                q.arg = format!("{}::new({})", if *arc { "::std::sync::Arc" } else { "::std::rc::Rc" }, q.arg);
+                return Some(q);
+            }
+            Ty::Ref(sh, false) if matches!(&**sh, Ty::Shared(x, _) if shared_value(g, x)) => {
+                let mut q = self.param(g, sh, a)?;
+                q.arg = format!("&{}", q.arg);
+                return Some(q);
+            }
             // a map or set (lent, &HashMap): a Rust one made from Volt's keys and values (elements)
             Ty::Map(..) | Ty::Set(_) | Ty::Ref(..) if matches!(t, Ty::Map(..) | Ty::Set(_)) || matches!(t, Ty::Ref(x, false) if matches!(**x, Ty::Map(..) | Ty::Set(_))) => {
                 let (inner, lent) = match t {
@@ -2457,6 +2484,12 @@ impl Lang for Rust {
             Ty::Ptr(x, _) if matches!(**x, Ty::Prim(_)) => {
                 let Ty::Prim(x) = **x else { return None };
                 ShimOut { params: vec![format!("{o}: *mut *mut {x}")], store: format!("*{o} = $v as *mut {x};") }
+            }
+            // the value an Rc or Arc shares, read through it (a copy)
+            Ty::Shared(x, _) if shared_value(g, x) => {
+                let mut q = self.out(g, x, o, owned)?;
+                q.store = q.store.replace("$v", "(*$v)");
+                q
             }
             // the value out of its box
             Ty::Boxed(x) if matches!(**x, Ty::Named(_) | Ty::Prim(_) | Ty::Char | Ty::String | Ty::Vec(_)) => {
