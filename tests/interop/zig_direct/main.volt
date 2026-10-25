@@ -85,6 +85,21 @@ fn kinds() -> void {
     kd::growAll(rs[..]);
     val made = kd::rects(3);
     std::println("zig more {} {} {} {} {} {} {} {}", cnt, kd::peek(&cnt), kd::sumThree(arr3[..]), f3[2], before, rs[0].w, made.len, made[2].w);
+    // a C string, a many-item pointer, a vector and a tuple struct
+    var many: i32[3] = { 1, 2, 3 };
+    val mp: i32* = &many[0];
+    val s6 = kd::sumMany(mp, 3);
+    kd::fillMany(mp, 2, 9);
+    val a3: f32[3] = { 1.0, 2.0, 3.0 };
+    val b3: f32[3] = { 4.0, 5.0, 6.0 };
+    val h2: f32[2] = { 3.0, 5.0 };
+    val hv = kd::halves(h2[..]);
+    val (q, r) = kd::divmod(17, 5);
+    val sw = kd::swap((4, 2.5));
+    val on = kd::maybeName(true) ?? std::string::from("-");
+    val off = kd::maybeName(false) ?? std::string::from("-");
+    std::println("zig c {} {} {} {} {} {} {} {} {} {} {} {}", kd::greet("hello"), kd::motto(), s6, many[1], kd::dot(a3[..], b3[..]), hv[1], q, r, sw.0, sw.1, on, off);
+    std::println("zig c2 {} {} {}", kd::nameLen("abc"), kd::nameLen(null), kd::shout("hey"));
 }
 
 fn run() -> fm::zig_error!void {

@@ -72,7 +72,7 @@ pub fn import(r: &Req) -> Result<(), String> {
             Some(Ty::Opt(x)) => if let Ty::Named(n) = &**x { deinit.get(n).map(|a| (f.clone(), *a, true)) } else { None },
             _ => None,
         }).collect()))).collect();
-        let lent = |t: &Option<Ty>| matches!(t, Some(Ty::Str | Ty::Slice(..) | Ty::Ref(..))) || matches!(t, Some(Ty::Opt(x)) if matches!(**x, Ty::Str | Ty::Slice(..) | Ty::Ref(..)));
+        let lent = |t: &Option<Ty>| matches!(t, Some(Ty::Str | Ty::String | Ty::Slice(..) | Ty::Ref(..))) || matches!(t, Some(Ty::Opt(x)) if matches!(**x, Ty::Str | Ty::String | Ty::Slice(..) | Ty::Ref(..)));
         let tracked = w.unions.iter().filter(|(_, (tagged, fs))| !tagged || fs.iter().any(|(_, t)| lent(t))).map(|(u, _)| u.clone()).collect();
         let lang = Zig { deinit, opaques: w.opaques.clone(), unions, tracked };
         let (shim, volt) = Gen::new(&m, &r.alias, &lang).write("the file");
@@ -260,7 +260,7 @@ impl Walker {
                 let s = c.i;
                 // the signature up to its body (an error{...} set in it isn't the body)
                 while c.i < t.len() && !c.is(";") {
-                    if c.is("(") || (c.is("{") && c.i > 0 && t[c.i - 1] == Tok::Id("error".into())) {
+                    if c.is("(") || (c.is("{") && c.i > 0 && (t[c.i - 1] == Tok::Id("error".into()) || t[c.i - 1] == Tok::Id("struct".into()))) {
                         c.skip_group();
                         continue;
                     }
@@ -496,7 +496,7 @@ impl Walker {
         self.m.types.push(TypeDef { module: module.to_vec(), name: name.to_string(), generic: false, fields: None, variants: None, is_enum: false, clone: false, opaque: false, params: Vec::new(), rust_name: None });
         self.unions.insert(name.to_string(), (tag.is_some(), fields.iter().map(|f| (f.0.clone(), f.2.clone())).collect()));
         // text, a slice or a pointer Volt passes is only lent for the call: the union would keep it
-        let borrows = |t: &Ty| matches!(t, Ty::Str | Ty::Slice(..) | Ty::Ref(..));
+        let borrows = |t: &Ty| matches!(t, Ty::Str | Ty::String | Ty::Slice(..) | Ty::Ref(..));
         let borrows = |t: &Option<Ty>| matches!(t, Some(Ty::Opt(x)) if borrows(x)) || t.as_ref().is_some_and(borrows);
         // ...so a tagged union's maker copies it (text, numbers or text in a slice, what a pointer
         // points at), and the union frees the copy (vu_copy; model() drops a pointer to a type
@@ -909,11 +909,56 @@ fn parse_ty_in(t: &[Tok], owner: Option<&str>, gens: &[String]) -> Option<Ty> {
                 _ => None,
             }
         }
-        // [N]T: a fixed array of numbers
+        // [N]T and @Vector(N, T): a fixed array of numbers
         [Tok::P(a), Tok::Num(n), Tok::P(b), rest @ ..] if a == "[" && b == "]" => match parse_ty(rest, owner)? {
             e @ Ty::Prim(_) => Some(Ty::Array(Box::new(e), n.replace('_', "").parse().ok()?)),
             _ => None,
         },
+        [Tok::Id(f), Tok::P(a), Tok::Num(n), Tok::P(c), rest @ .., Tok::P(b)] if f == "@Vector" && a == "(" && c == "," && b == ")" => match parse_ty(rest, owner)? {
+            e @ Ty::Prim(_) => Some(Ty::Array(Box::new(e), n.replace('_', "").parse().ok()?)),
+            _ => None,
+        },
+        // [*:0]const u8: a C string, text (Ty::String: the shim adds the 0); [*]T and [*c]T of a
+        // number: Volt's T*
+        [Tok::P(a), Tok::P(st), Tok::P(col), Tok::Num(z), Tok::P(b), rest @ ..] if a == "[" && st == "*" && col == ":" && z == "0" && b == "]" => {
+            let rest = if matches!(rest.first(), Some(Tok::Id(c)) if c == "const") { &rest[1..] } else { rest };
+            (parse_ty(rest, owner)? == Ty::Prim("u8")).then_some(Ty::String)
+        }
+        [Tok::P(a), Tok::P(st), more @ ..] if a == "[" && st == "*" && matches!(more, [Tok::P(b), ..] | [Tok::Id(_), Tok::P(b), ..] if b == "]") => {
+            let rest = if matches!(more.first(), Some(Tok::Id(c)) if c == "c") { &more[2..] } else { &more[1..] };
+            let (mutable, rest) = match rest {
+                [Tok::Id(c), rest @ ..] if c == "const" => (false, rest),
+                rest => (true, rest),
+            };
+            match parse_ty(rest, owner)? {
+                e @ Ty::Prim(_) => Some(Ty::Ptr(Box::new(e), mutable)),
+                _ => None,
+            }
+        }
+        // struct { A, B }: a tuple (a struct with named fields isn't one)
+        [Tok::Id(k), Tok::P(a), inner @ .., Tok::P(b)] if k == "struct" && a == "{" && b == "}" => {
+            let (mut parts, mut cur, mut depth) = (Vec::new(), Vec::new(), 0usize);
+            for x in inner {
+                match x {
+                    Tok::P(p) if matches!(p.as_str(), "(" | "[" | "{") => depth += 1,
+                    Tok::P(p) if matches!(p.as_str(), ")" | "]" | "}") => depth = depth.saturating_sub(1),
+                    Tok::P(p) if p == ":" && depth == 0 => return None,
+                    Tok::P(p) if p == "," && depth == 0 => {
+                        parts.push(std::mem::take(&mut cur));
+                        continue;
+                    }
+                    _ => {}
+                }
+                cur.push(x.clone());
+            }
+            if !cur.is_empty() {
+                parts.push(cur);
+            }
+            if parts.len() < 2 {
+                return None;
+            }
+            Some(Ty::Tuple(parts.iter().map(|p| parse_ty(p, owner).map(|t| (String::new(), t))).collect::<Option<Vec<_>>>()?))
+        }
         _ if is(0, "[") && is(1, "]") => {
             let (mutable, rest) = match &t[2..] {
                 [Tok::Id(c), rest @ ..] if c == "const" => (false, rest),
@@ -1055,6 +1100,30 @@ impl Lang for Zig {
                 }
                 _ => return None,
             },
+            // a C string: Volt's text, copied with the 0 Zig expects
+            Ty::String => {
+                p.params.extend([format!("{a}: ?[*]const u8"), format!("{a}_n: usize")]);
+                p.pre.extend([format!("const {a}_z = alloc.dupeSentinel(u8, s({a}, {a}_n), 0) catch @panic(\"out of memory\");"), format!("defer alloc.free({a}_z);")]);
+                p.arg = format!("{a}_z.ptr");
+            }
+            // [*]T of a number: Volt's T*, which mustn't be null
+            Ty::Ptr(x, mutable) => {
+                let Ty::Prim(x) = **x else { return None };
+                p.params.push(format!("{a}: ?[*]{}{x}", if *mutable { "" } else { "const " }));
+                p.arg = format!("{a}.?");
+            }
+            // a tuple struct: its elements, each a parameter of its own
+            Ty::Tuple(es) => {
+                let mut args = Vec::new();
+                for (k, (_, et)) in es.iter().enumerate() {
+                    let sub = self.param(g, et, &format!("{a}_{k}"))?;
+                    p.params.extend(sub.params);
+                    p.pre.extend(sub.pre);
+                    p.post.extend(sub.post);
+                    args.push(sub.arg);
+                }
+                p.arg = format!(".{{ {} }}", args.join(", "));
+            }
             // [N]T: Volt's T[..], which must hold N
             Ty::Array(e, n) => {
                 let Ty::Prim(x) = **e else { return None };
@@ -1081,6 +1150,14 @@ impl Lang for Zig {
                 Ty::Str => {
                     p.params.extend([format!("{a}: ?[*]const u8"), format!("{a}_n: usize")]);
                     p.arg = format!("if ({a}) |{a}_q| {a}_q[0..{a}_n] else null");
+                }
+                Ty::String => {
+                    p.params.extend([format!("{a}: ?[*]const u8"), format!("{a}_n: usize")]);
+                    p.pre.extend([
+                        format!("const {a}_z = if ({a}) |{a}_q| (alloc.dupeSentinel(u8, {a}_q[0..{a}_n], 0) catch @panic(\"out of memory\")) else null;"),
+                        format!("defer if ({a}_z) |{a}_w| alloc.free({a}_w);"),
+                    ]);
+                    p.arg = format!("if ({a}_z) |{a}_w| {a}_w.ptr else null");
                 }
                 _ => return None,
             },
@@ -1193,9 +1270,28 @@ impl Lang for Zig {
                 }
                 _ => return None,
             },
-            Ty::Array(e, _) => {
+            // (a @Vector too, as its array)
+            Ty::Array(e, n) => {
                 let Ty::Prim(x) = **e else { return None };
-                ShimOut { params: vec![format!("{o}: *?[*]{x}"), format!("{o}_n: *usize")], store: format!("put_copy({x}, &$v, {o}, {o}_n);") }
+                ShimOut { params: vec![format!("{o}: *?[*]{x}"), format!("{o}_n: *usize")], store: format!("put_copy({x}, &@as([{n}]{x}, $v), {o}, {o}_n);") }
+            }
+            // a C string: a copy of its text (the string freed when the call gave it over)
+            Ty::String => {
+                let free = if owned { " alloc.free(std.mem.span($v));" } else { "" };
+                ShimOut { params: vec![format!("{o}: *?[*]u8"), format!("{o}_n: *usize")], store: format!("put_copy(u8, std.mem.span($v), {o}, {o}_n);{free}") }
+            }
+            Ty::Ptr(x, _) => {
+                let Ty::Prim(x) = **x else { return None };
+                ShimOut { params: vec![format!("{o}: *?[*]{x}")], store: format!("{o}.* = @constCast($v);") }
+            }
+            Ty::Tuple(es) => {
+                let (mut params, mut stores) = (Vec::new(), Vec::new());
+                for (k, (_, et)) in es.iter().enumerate() {
+                    let x = self.out(g, et, &format!("{o}{k}"), owned)?;
+                    params.extend(x.params);
+                    stores.push(x.store.replace("$v", &format!("$v[{k}]")));
+                }
+                ShimOut { params, store: format!("{{ {} }}", stores.join(" ")) }
             }
             Ty::Named(_) => {
                 let ti = g.info(t)?;
@@ -1433,6 +1529,12 @@ mod tests {
         assert_eq!(ty("*i32"), Some(Ty::Ref(Box::new(Ty::Prim("i32")), true)));
         assert_eq!(ty("[]const shapes.Point"), Some(Ty::Slice(Box::new(Ty::Named("Point".into())), false)));
         assert_eq!(ty("[4][]const u8"), None);
+        assert_eq!(ty("[*:0]const u8"), Some(Ty::String));
+        assert_eq!(ty("[*]const i32"), Some(Ty::Ptr(Box::new(Ty::Prim("i32")), false)));
+        assert_eq!(ty("[*c]u8"), Some(Ty::Ptr(Box::new(Ty::Prim("u8")), true)));
+        assert_eq!(ty("@Vector(4, f32)"), Some(Ty::Array(Box::new(Ty::Prim("f32")), 4)));
+        assert_eq!(ty("struct { i32, f64 }"), Some(Ty::Tuple(vec![(String::new(), Ty::Prim("i32")), (String::new(), Ty::Prim("f64"))])));
+        assert_eq!(ty("struct { x: i32, y: i32 }"), None);
         assert_eq!(ty("type"), None);
     }
 

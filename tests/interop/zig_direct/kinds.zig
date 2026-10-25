@@ -231,3 +231,54 @@ pub fn rects(allocator: std.mem.Allocator, n: usize) []Rect {
     for (out, 0..) |*r, i| r.* = .{ .w = @floatFromInt(i), .h = 2 };
     return out;
 }
+
+// a C string, a many-item pointer, a vector and a tuple struct
+pub fn greet(name: [*:0]const u8) usize {
+    return std.mem.len(name);
+}
+
+pub fn motto() [*:0]const u8 {
+    return "zig!";
+}
+
+pub fn maybeName(on: bool) ?[*:0]const u8 {
+    return if (on) "on" else null;
+}
+
+pub fn sumMany(p: [*]const i32, n: usize) i32 {
+    var t: i32 = 0;
+    for (p[0..n]) |x| t += x;
+    return t;
+}
+
+pub fn fillMany(p: [*]i32, n: usize, v: i32) void {
+    for (p[0..n]) |*x| x.* = v;
+}
+
+pub fn dot(a: @Vector(3, f32), b: @Vector(3, f32)) f32 {
+    return @reduce(.Add, a * b);
+}
+
+pub fn halves(v: @Vector(2, f32)) @Vector(2, f32) {
+    return v / @as(@Vector(2, f32), @splat(2));
+}
+
+pub fn divmod(a: i32, b: i32) struct { i32, i32 } {
+    return .{ @divTrunc(a, b), @rem(a, b) };
+}
+
+pub fn swap(t: struct { i32, f64 }) struct { f64, i32 } {
+    return .{ t[1], t[0] };
+}
+
+pub fn nameLen(n: ?[*:0]const u8) usize {
+    return if (n) |x| std.mem.len(x) else 0;
+}
+
+pub fn shout(allocator: std.mem.Allocator, s: [*:0]const u8) [*:0]u8 {
+    const t = std.mem.span(s);
+    const out = allocator.allocSentinel(u8, t.len + 1, 0) catch @panic("out of memory");
+    for (t, 0..) |c, i| out[i] = std.ascii.toUpper(c);
+    out[t.len] = '!';
+    return out;
+}
