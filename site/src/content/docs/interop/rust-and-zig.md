@@ -188,6 +188,8 @@ fn main() -> !void {
 | `[*:0]const u8` (`?[*:0]const u8` too) | `str` in (Zig gets a copy ending in 0); `std::string` out, a copy (a string the function made with the allocator it was given is freed) |
 | `[*]T`, `[*]const T`, `[*c]T` of a number | `T*`: the same address (`val p: i32* = &xs[0]; kd::fillMany(p, 2, 9);`), which mustn't be null |
 | `struct { A, B }` (a tuple) | a Volt tuple, `(A, B)`, each way (`val (q, r) = kd::divmod(17, 5);`) |
+| `std.ArrayList(T)` of a number | `std::vec<T>` out (a copy of its items; the list is freed when the function was given the allocator); `*const std.ArrayList(T)` is `T[..]` in (`kd::listSum(ev.items())`), and `*std.ArrayList(T)` is `std::vec<T>&` (`kd::pushSquares(&ev, 3)`): Zig gets a list of the vec's items, and the list's items replace the vec's when the call ends |
+| `std.AutoHashMap(K, V)`, `std.StringHashMap(V)` of numbers | `std::map<K, V>` (`std::map<std::string, V>`) out, a copy (freed likewise); `*const` one in, `std::map<K, V>&`: Zig gets a map made from its entries |
 | `?T` | `T?` |
 | `*T`, `*const T` of a struct | `T&` |
 | `*T`, `*const T` of a number | `T&` (`kd::bumpBy(&n, 3)`): a `*T` is Volt's own, so Zig's change shows; a `*const T` points at a copy |

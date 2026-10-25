@@ -882,6 +882,26 @@ fn sig_in(head: &[Tok], owner: Option<&str>, outer: &[String]) -> Sig {
     s
 }
 
+/// a list's items, split at its top-level commas (a trailing one ends it)
+fn split_commas(t: &[Tok]) -> Vec<&[Tok]> {
+    let (mut parts, mut start, mut depth) = (Vec::new(), 0, 0usize);
+    for (i, x) in t.iter().enumerate() {
+        match x {
+            Tok::P(p) if matches!(p.as_str(), "(" | "[" | "{") => depth += 1,
+            Tok::P(p) if matches!(p.as_str(), ")" | "]" | "}") => depth = depth.saturating_sub(1),
+            Tok::P(p) if p == "," && depth == 0 => {
+                parts.push(&t[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    if start < t.len() {
+        parts.push(&t[start..]);
+    }
+    parts
+}
+
 /// a Zig type from its tokens, when it's one Volt can name; `owner`'s name is Self
 fn parse_ty(t: &[Tok], owner: Option<&str>) -> Option<Ty> {
     parse_ty_in(t, owner, &[])
@@ -905,7 +925,7 @@ fn parse_ty_in(t: &[Tok], owner: Option<&str>, gens: &[String]) -> Option<Ty> {
                 _ => (true, rest),
             };
             match parse_ty(rest, owner)? {
-                x @ (Ty::Named(_) | Ty::SelfTy | Ty::Prim(_)) => Some(Ty::Ref(Box::new(x), mutable)),
+                x @ (Ty::Named(_) | Ty::SelfTy | Ty::Prim(_) | Ty::Vec(_) | Ty::Map(..)) => Some(Ty::Ref(Box::new(x), mutable)),
                 _ => None,
             }
         }
@@ -937,27 +957,21 @@ fn parse_ty_in(t: &[Tok], owner: Option<&str>, gens: &[String]) -> Option<Ty> {
         }
         // struct { A, B }: a tuple (a struct with named fields isn't one)
         [Tok::Id(k), Tok::P(a), inner @ .., Tok::P(b)] if k == "struct" && a == "{" && b == "}" => {
-            let (mut parts, mut cur, mut depth) = (Vec::new(), Vec::new(), 0usize);
-            for x in inner {
-                match x {
-                    Tok::P(p) if matches!(p.as_str(), "(" | "[" | "{") => depth += 1,
-                    Tok::P(p) if matches!(p.as_str(), ")" | "]" | "}") => depth = depth.saturating_sub(1),
-                    Tok::P(p) if p == ":" && depth == 0 => return None,
-                    Tok::P(p) if p == "," && depth == 0 => {
-                        parts.push(std::mem::take(&mut cur));
-                        continue;
-                    }
-                    _ => {}
-                }
-                cur.push(x.clone());
-            }
-            if !cur.is_empty() {
-                parts.push(cur);
-            }
-            if parts.len() < 2 {
+            let parts = split_commas(inner);
+            if parts.len() < 2 || parts.iter().any(|p| p.get(1) == Some(&Tok::P(":".into()))) {
                 return None;
             }
             Some(Ty::Tuple(parts.iter().map(|p| parse_ty(p, owner).map(|t| (String::new(), t))).collect::<Option<Vec<_>>>()?))
+        }
+        // std's containers of numbers: Volt's std::vec and std::map (copies)
+        [Tok::Id(sd), Tok::P(d), Tok::Id(c), Tok::P(a), inner @ .., Tok::P(b)] if sd == "std" && d == "." && a == "(" && b == ")" => {
+            let args: Vec<Ty> = split_commas(inner).iter().map(|p| parse_ty(p, owner).filter(|t| matches!(t, Ty::Prim(_)))).collect::<Option<_>>()?;
+            match (c.as_str(), &args[..]) {
+                ("ArrayList", [e]) => Some(Ty::Vec(Box::new(e.clone()))),
+                ("AutoHashMap", [k, v]) => Some(Ty::Map(Box::new(k.clone()), Box::new(v.clone()))),
+                ("StringHashMap", [v]) => Some(Ty::Map(Box::new(Ty::String), Box::new(v.clone()))),
+                _ => None,
+            }
         }
         _ if is(0, "[") && is(1, "]") => {
             let (mutable, rest) = match &t[2..] {
@@ -1131,6 +1145,39 @@ impl Lang for Zig {
                 p.pre.push(format!("if ({a}_n != {n}) std.debug.panic(\"an array of {n} given {{d}} elements\", .{{{a}_n}});"));
                 p.arg = format!("sl({x}, {a}, {a}_n)[0..{n}].*");
             }
+            // *const std.ArrayList(T): a list made from Volt's T[..] for the call; *std.ArrayList(T):
+            // Volt's std::vec<T>&, the list's items copied back when the call ends (an error too)
+            Ty::Ref(l, mutable) if matches!(**l, Ty::Vec(_)) => {
+                let Ty::Vec(e) = &**l else { return None };
+                let Ty::Prim(x) = **e else { return None };
+                p.params.extend([format!("{a}: ?[*]const {x}"), format!("{a}_n: usize")]);
+                p.pre.push(format!("var {a}_l: std.ArrayList({x}) = .empty;"));
+                if *mutable {
+                    p.params.extend([format!("{a}_o: *?[*]{x}"), format!("{a}_on: *usize")]);
+                    p.pre.push(format!("defer {{\n        put_copy({x}, {a}_l.items, {a}_o, {a}_on);\n        {a}_l.deinit(alloc);\n    }}"));
+                } else {
+                    p.pre.push(format!("defer {a}_l.deinit(alloc);"));
+                }
+                p.pre.push(format!("{a}_l.appendSlice(alloc, sl({x}, {a}, {a}_n)) catch @panic(\"out of memory\");"));
+                p.arg = format!("&{a}_l");
+            }
+            // *const std.AutoHashMap(K, V) or StringHashMap(V): a map made from Volt's entries
+            Ty::Ref(m, false) if matches!(**m, Ty::Map(..)) => {
+                let Ty::Map(k, v) = &**m else { return None };
+                let Ty::Prim(vx) = **v else { return None };
+                let (mt, kp, key) = match **k {
+                    Ty::String => (format!("std.StringHashMap({vx})"), "VoltStr".to_string(), format!("s({a}_k.?[{a}_i].p, {a}_k.?[{a}_i].n)")),
+                    Ty::Prim(kx) => (format!("std.AutoHashMap({kx}, {vx})"), kx.to_string(), format!("{a}_k.?[{a}_i]")),
+                    _ => return None,
+                };
+                p.params.extend([format!("{a}_k: ?[*]const {kp}"), format!("{a}_v: ?[*]const {vx}"), format!("{a}_n: usize")]);
+                p.pre.extend([
+                    format!("var {a}_m = {mt}.init(alloc);"),
+                    format!("defer {a}_m.deinit();"),
+                    format!("for (0..{a}_n) |{a}_i| {a}_m.put({key}, {a}_v.?[{a}_i]) catch @panic(\"out of memory\");"),
+                ]);
+                p.arg = format!("&{a}_m");
+            }
             // *T of a number: Volt's, which the call may change; *const T: its value's copy
             Ty::Ref(x, mutable) if matches!(**x, Ty::Prim(_)) => {
                 let Ty::Prim(x) = **x else { return None };
@@ -1274,6 +1321,26 @@ impl Lang for Zig {
             Ty::Array(e, n) => {
                 let Ty::Prim(x) = **e else { return None };
                 ShimOut { params: vec![format!("{o}: *?[*]{x}"), format!("{o}_n: *usize")], store: format!("put_copy({x}, &@as([{n}]{x}, $v), {o}, {o}_n);") }
+            }
+            // std.ArrayList(T): its items copied
+            Ty::Vec(e) => {
+                let Ty::Prim(x) = **e else { return None };
+                let (bind, free) = if owned { ("var", format!(" {o}_l.deinit(alloc);")) } else { ("const", String::new()) };
+                ShimOut { params: vec![format!("{o}: *?[*]{x}"), format!("{o}_n: *usize")], store: format!("{{ {bind} {o}_l = $v; put_copy({x}, {o}_l.items, {o}, {o}_n);{free} }}") }
+            }
+            // a hash map: its keys and values as two arrays (text keys copied)
+            Ty::Map(k, v) => {
+                let Ty::Prim(vx) = **v else { return None };
+                let (kp, key) = match **k {
+                    Ty::String => ("VoltOwnedStr".to_string(), format!("own_str({o}_e.key_ptr.*)")),
+                    Ty::Prim(kx) => (kx.to_string(), format!("{o}_e.key_ptr.*")),
+                    _ => return None,
+                };
+                let (bind, free) = if owned { ("var", format!(" {o}_m.deinit();")) } else { ("const", String::new()) };
+                ShimOut {
+                    params: vec![format!("{o}k: *?[*]{kp}"), format!("{o}k_n: *usize"), format!("{o}v: *?[*]{vx}"), format!("{o}v_n: *usize")],
+                    store: format!("{{ {bind} {o}_m = $v; const {o}_c = {o}_m.count(); const {o}_ks = alloc.alloc({kp}, {o}_c) catch @panic(\"out of memory\"); const {o}_vs = alloc.alloc({vx}, {o}_c) catch @panic(\"out of memory\"); var {o}_it = {o}_m.iterator(); var {o}_i: usize = 0; while ({o}_it.next()) |{o}_e| : ({o}_i += 1) {{ {o}_ks[{o}_i] = {key}; {o}_vs[{o}_i] = {o}_e.value_ptr.*; }} {o}k.* = {o}_ks.ptr; {o}k_n.* = {o}_c; {o}v.* = {o}_vs.ptr; {o}v_n.* = {o}_c;{free} }}"),
+                }
             }
             // a C string: a copy of its text (the string freed when the call gave it over)
             Ty::String => {
@@ -1474,6 +1541,7 @@ impl Lang for Zig {
         s.push_str("fn s(p: ?[*]const u8, n: usize) []const u8 {\n    return if (p) |q| q[0..n] else \"\";\n}\n");
         s.push_str("fn sl(comptime T: type, p: ?[*]const T, n: usize) []const T {\n    return if (p) |q| q[0..n] else &[_]T{};\n}\n");
         s.push_str("fn slm(comptime T: type, p: ?[*]T, n: usize) []T {\n    return if (p) |q| q[0..n] else @as([*]T, undefined)[0..0];\n}\n");
+        s.push_str("// text Volt gets a copy of\nfn own_str(x: []const u8) VoltOwnedStr {\n    const d = alloc.dupe(u8, x) catch @panic(\"out of memory\");\n    return .{ .p = d.ptr, .n = d.len };\n}\n");
         s.push_str("fn strs(p: ?[*]const VoltStr, n: usize) [][]const u8 {\n    const out = alloc.alloc([]const u8, n) catch @panic(\"out of memory\");\n    for (sl(VoltStr, p, n), 0..) |x, i| out[i] = s(x.p, x.n);\n    return out;\n}\n");
         s.push_str("// a slice made with alloc: handed over as it is\nfn put_owned(comptime T: type, v: []const T, p: *?[*]T, n: *usize) void {\n    p.* = @constCast(v.ptr);\n    n.* = v.len;\n}\n");
         s.push_str("// a slice someone else owns: a copy made with alloc\nfn put_copy(comptime T: type, v: []const T, p: *?[*]T, n: *usize) void {\n    const d = alloc.dupe(T, v) catch @panic(\"out of memory\");\n    p.* = d.ptr;\n    n.* = d.len;\n}\n\n");
@@ -1481,6 +1549,9 @@ impl Lang for Zig {
         let _ = writeln!(s, "export fn {}(p: ?[*]u8, n: usize) void {{\n    if (p) |q| alloc.free(q[0..n]);\n}}\n", free("bytes"));
         for x in &g.vec_elems {
             let _ = writeln!(s, "export fn {}(p: ?[*]{x}, n: usize) void {{\n    if (p) |q| alloc.free(q[0..n]);\n}}\n", free(&format!("{x}s")));
+        }
+        if g.strs {
+            let _ = writeln!(s, "export fn {}(p: ?[*]VoltOwnedStr, n: usize) void {{\n    if (p) |q| {{\n        for (q[0..n]) |x| if (x.p) |b| alloc.free(b[0..x.n]);\n        alloc.free(q[0..n]);\n    }}\n}}\n", free("strs"));
         }
         let mut ptrs = false;
         for n in &g.elem_types {
@@ -1535,6 +1606,11 @@ mod tests {
         assert_eq!(ty("@Vector(4, f32)"), Some(Ty::Array(Box::new(Ty::Prim("f32")), 4)));
         assert_eq!(ty("struct { i32, f64 }"), Some(Ty::Tuple(vec![(String::new(), Ty::Prim("i32")), (String::new(), Ty::Prim("f64"))])));
         assert_eq!(ty("struct { x: i32, y: i32 }"), None);
+        assert_eq!(ty("std.ArrayList(i32)"), Some(Ty::Vec(Box::new(Ty::Prim("i32")))));
+        assert_eq!(ty("*std.ArrayList(u8)"), Some(Ty::Ref(Box::new(Ty::Vec(Box::new(Ty::Prim("u8")))), true)));
+        assert_eq!(ty("std.AutoHashMap(u32, f64)"), Some(Ty::Map(Box::new(Ty::Prim("u32")), Box::new(Ty::Prim("f64")))));
+        assert_eq!(ty("*const std.StringHashMap(usize)"), Some(Ty::Ref(Box::new(Ty::Map(Box::new(Ty::String), Box::new(Ty::Prim("usize")))), false)));
+        assert_eq!(ty("std.ArrayList([]const u8)"), None);
         assert_eq!(ty("type"), None);
     }
 

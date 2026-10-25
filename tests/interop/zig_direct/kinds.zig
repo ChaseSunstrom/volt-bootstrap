@@ -282,3 +282,47 @@ pub fn shout(allocator: std.mem.Allocator, s: [*:0]const u8) [*:0]u8 {
     out[t.len] = '!';
     return out;
 }
+
+// std.ArrayList and the hash maps: copies of Volt's vec and map (a *ArrayList's changes come back)
+pub fn evensUpTo(allocator: std.mem.Allocator, n: i32) std.ArrayList(i32) {
+    var l: std.ArrayList(i32) = .empty;
+    var i: i32 = 0;
+    while (i <= n) : (i += 2) l.append(allocator, i) catch @panic("out of memory");
+    return l;
+}
+
+pub fn pushSquares(allocator: std.mem.Allocator, l: *std.ArrayList(i32), n: i32) void {
+    var i: i32 = 1;
+    while (i <= n) : (i += 1) l.append(allocator, i * i) catch @panic("out of memory");
+}
+
+pub fn listSum(l: *const std.ArrayList(i32)) i32 {
+    var t: i32 = 0;
+    for (l.items) |x| t += x;
+    return t;
+}
+
+pub fn squaresMap(allocator: std.mem.Allocator, n: u32) std.AutoHashMap(u32, u64) {
+    var m = std.AutoHashMap(u32, u64).init(allocator);
+    var i: u32 = 1;
+    while (i <= n) : (i += 1) m.put(i, @as(u64, i) * i) catch @panic("out of memory");
+    return m;
+}
+
+pub fn mapTotal(m: *const std.AutoHashMap(u32, u64)) u64 {
+    var t: u64 = 0;
+    var it = m.iterator();
+    while (it.next()) |e| t += e.value_ptr.*;
+    return t;
+}
+
+pub fn wordLens(allocator: std.mem.Allocator, text: []const u8) std.StringHashMap(usize) {
+    var m = std.StringHashMap(usize).init(allocator);
+    var it = std.mem.tokenizeScalar(u8, text, ' ');
+    while (it.next()) |w| m.put(w, w.len) catch @panic("out of memory");
+    return m;
+}
+
+pub fn lenOf(m: *const std.StringHashMap(usize), w: []const u8) usize {
+    return m.get(w) orelse 0;
+}

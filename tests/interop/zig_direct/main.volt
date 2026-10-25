@@ -100,6 +100,14 @@ fn kinds() -> void {
     val off = kd::maybeName(false) ?? std::string::from("-");
     std::println("zig c {} {} {} {} {} {} {} {} {} {} {} {}", kd::greet("hello"), kd::motto(), s6, many[1], kd::dot(a3[..], b3[..]), hv[1], q, r, sw.0, sw.1, on, off);
     std::println("zig c2 {} {} {}", kd::nameLen("abc"), kd::nameLen(null), kd::shout("hey"));
+    // std.ArrayList and the hash maps
+    var ev = kd::evensUpTo(6);
+    kd::pushSquares(&ev, 3);
+    var sq = kd::squaresMap(3);
+    sq.put(10, 1);
+    var wl = kd::wordLens("ab cde f");
+    val cde = wl.get(std::string::from("cde")) ?? @panic("no cde");
+    std::println("zig std {} {} {} {} {} {} {}", ev.len, ev[6], kd::listSum(ev.items()), sq.len, kd::mapTotal(&sq), *cde, kd::lenOf(&wl, "f"));
 }
 
 fn run() -> fm::zig_error!void {

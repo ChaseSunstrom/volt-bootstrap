@@ -630,13 +630,28 @@ impl<'a> Gen<'a> {
         let mut p = VoltParam::default();
         // (a reference to a map or set: lent as the map itself is)
         let t = match t {
-            Ty::Ref(x, false) if matches!(**x, Ty::Map(..) | Ty::Set(_)) => &**x,
+            Ty::Ref(x, false) if matches!(**x, Ty::Map(..) | Ty::Set(_) | Ty::Vec(_)) => &**x,
             t => t,
         };
         match t {
             // the boxed value itself (the other side boxes it)
             Ty::Boxed(x) => return self.volt_param_at(name, x, &a, i),
             Ty::Cow => return self.volt_param_at(name, &Ty::Str, &a, i),
+            // a list the call may change (Zig's *std.ArrayList(T)): Volt's vec, its items passed and
+            // the list's copied back over them when the call ends
+            Ty::Ref(l, true) if matches!(&**l, Ty::Vec(e) if matches!(**e, Ty::Prim(_))) => {
+                let Ty::Vec(e) = &**l else { return None };
+                let Ty::Prim(x) = **e else { return None };
+                self.vec_elems.insert(x);
+                p.param = format!("{vn}: std::vec<{x}>&");
+                p.ext.extend([format!("{a}: {x}*"), format!("{a}_n: usize"), format!("{a}_o: {x}**"), format!("{a}_on: usize*")]);
+                p.pre.extend([
+                    format!("var {a}_o: {x}* = null;"),
+                    format!("var {a}_on: usize = 0;"),
+                    format!("defer {{\n        val {a}_w = {ns}::take_{x}s({a}_o, {a}_on);\n        {vn}.clear();\n        {vn}.extend({a}_w.items()) catch @panic(\"out of memory\");\n    }}"),
+                ]);
+                p.args.extend([format!("@cast<{x}*>({vn}.items().ptr)"), format!("{vn}.len"), format!("&{a}_o"), format!("&{a}_on")]);
+            }
             // a pointer to a number: Volt's, the same address
             Ty::Ptr(x, _) if matches!(**x, Ty::Prim(_)) => {
                 let Ty::Prim(x) = **x else { return None };
