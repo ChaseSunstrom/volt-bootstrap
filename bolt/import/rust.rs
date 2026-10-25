@@ -656,7 +656,7 @@ impl<'a> Doc<'a> {
                 } else if count[&(ty.clone(), c.clone())] > 1 {
                     self.m.left_out.push(format!("{ty}'s {tr}::{c} (another trait's const has its name)"));
                 } else {
-                    self.m.methods.entry(ty.clone()).or_default().push(Sig { name: c.clone(), recv: Recv::None, params: Vec::new(), ret: Some(cty), skip: None, src: format!("const {c} (of {tr})"), generics: Vec::new(), call: Some(format!("<{recv} as {tpath}>::{c}")) });
+                    self.m.methods.entry(ty.clone()).or_default().push(Sig { name: c.clone(), recv: Recv::None, params: Vec::new(), ret: Some(cty), skip: None, src: format!("const {c} (of {tr})"), generics: Vec::new(), thread_bounds: Vec::new(), call: Some(format!("<{recv} as {tpath}>::{c}")) });
                 }
             }
         }
@@ -832,7 +832,7 @@ impl<'a> Doc<'a> {
 
     /// a function or method, under the name it's called by
     fn sig(&self, it: &Json, f: &Json, name: &str) -> Sig {
-        let mut s = Sig { name: name.to_string(), recv: Recv::None, params: Vec::new(), ret: Some(Ty::Unit), skip: None, src: self.src(it, name), generics: Vec::new(), call: None };
+        let mut s = Sig { name: name.to_string(), recv: Recv::None, params: Vec::new(), ret: Some(Ty::Unit), skip: None, src: self.src(it, name), generics: Vec::new(), thread_bounds: Vec::new(), call: None };
         let generics = f.get("generics");
         let is_async = f.get("header").and_then(|h| h.get("is_async")).and_then(Json::bool) == Some(true);
         // type parameters make a generic fn, built per instance a program uses (their bounds are
@@ -852,6 +852,8 @@ impl<'a> Doc<'a> {
                 bounds.entry(n.to_string()).or_default().extend(t.get("bounds").map_or(&[][..], Json::arr).iter().cloned());
             }
         }
+        // Send and Sync bounds: Volt's send and sync (an unmet one warns at the call)
+        s.thread_bounds = bounds.iter().filter_map(|(n, l)| Some((n.clone(), thread_bound(l)?))).collect();
         let mut closures: BTreeMap<String, Ty> = BTreeMap::new();
         for (n, list) in bounds {
             let list = Json::Arr(list);
@@ -1189,6 +1191,15 @@ impl<'a> Doc<'a> {
         let mut std_tr: BTreeSet<String> = BTreeSet::new();
         for iid in body.get("impls").map_or(&[][..], Json::arr) {
             let Some(im) = iid.key().and_then(|k| self.idx.get(&k)).and_then(|x| x.get("inner")).and_then(|i| i.get("impl")) else { continue };
+            // Send and Sync (rustdoc's synthetic impls, or an unsafe impl): its handle's @send, @sync
+            let last = im.get("trait").filter(|t| !t.is_null()).and_then(|t| t.get("path")).and_then(Json::str).and_then(|p| p.rsplit("::").next());
+            if let Some(a @ ("Send" | "Sync")) = last {
+                if !im.get("blanket_impl").is_some_and(|b| !b.is_null()) {
+                    let e = self.m.threads.entry(name.clone()).or_default();
+                    e[usize::from(a == "Sync")] = Some(im.get("is_negative").and_then(Json::bool) != Some(true));
+                }
+                continue;
+            }
             if im.get("blanket_impl").is_some_and(|b| !b.is_null()) || im.get("is_synthetic").and_then(Json::bool) == Some(true) {
                 continue;
             }
@@ -1219,7 +1230,7 @@ impl<'a> Doc<'a> {
         // (Volt's own compare and hash it)
         let have: BTreeSet<String> = self.m.methods.get(&name).map(|v| v.iter().map(|s| s.name.clone()).collect()).unwrap_or_default();
         let me = Ty::Ref(Box::new(Ty::Named(name.clone())), false);
-        let mk = |n: &str, call: Option<&str>, params: Vec<(String, Option<Ty>)>, ret: Ty, tr: &str| Sig { name: n.into(), recv: Recv::Ref, params, ret: Some(ret), skip: None, src: format!("{n} (impl {tr} for {name})"), generics: Vec::new(), call: call.map(String::from) };
+        let mk = |n: &str, call: Option<&str>, params: Vec<(String, Option<Ty>)>, ret: Ty, tr: &str| Sig { name: n.into(), recv: Recv::Ref, params, ret: Some(ret), skip: None, src: format!("{n} (impl {tr} for {name})"), generics: Vec::new(), thread_bounds: Vec::new(), call: call.map(String::from) };
         let mut extra = Vec::new();
         if std_tr.contains("Display") {
             extra.push(mk("to_string", None, Vec::new(), Ty::String, "std::fmt::Display"));
@@ -1495,6 +1506,21 @@ fn under_cfg_doc(it: &Json) -> bool {
 }
 
 /// a number rustdoc wrote as a Volt literal of type x (None for what Volt can't write: inf, NaN)
+/// a type parameter's Send and Sync bounds as Volt writes them (send + sync), if it has any
+fn thread_bound(bounds: &[Json]) -> Option<String> {
+    let mut v: Vec<&str> = Vec::new();
+    for b in bounds {
+        match b.get("trait_bound").and_then(|t| t.get("trait")).and_then(|t| t.get("path")).and_then(Json::str).and_then(|p| p.rsplit("::").next()) {
+            Some("Send") => v.push("send"),
+            Some("Sync") => v.push("sync"),
+            _ => {}
+        }
+    }
+    v.sort_unstable();
+    v.dedup();
+    (!v.is_empty()).then(|| v.join(" + "))
+}
+
 fn volt_number(v: &str, x: &str) -> Option<String> {
     let n = int_text(v);
     if x.starts_with('f') {
@@ -1781,7 +1807,7 @@ fn sig(item: &[Tok]) -> Sig {
         _ => String::new(),
     };
     let head = item.iter().position(|x| matches!(x, Tok::P(p) if p == "{" || p == ";")).unwrap_or(item.len());
-    let mut s = Sig { name, recv: Recv::None, params: Vec::new(), ret: Some(Ty::Unit), skip: None, src: toks_line(&item[..head]), generics: Vec::new(), call: None };
+    let mut s = Sig { name, recv: Recv::None, params: Vec::new(), ret: Some(Ty::Unit), skip: None, src: toks_line(&item[..head]), generics: Vec::new(), thread_bounds: Vec::new(), call: None };
     if item[..k].iter().any(|x| *x == Tok::Id("async".into())) {
         s.skip = Some("it's async");
     }

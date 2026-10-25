@@ -2,7 +2,9 @@
 // (Part of package std: the package loader wraps every file in `namespace std`.)
 
 // A double-ended queue that owns its elements. Nothing is allocated until the first push.
+// (send and sync when its items are: it owns them, behind the pointer)
 <T: type, Allocator: std::mem::allocator = std::mem::default_allocator>
+@attributes([@send, @sync])
 public struct deque {
     ptr: T* = @cast<T*>(@alignof(T)); // cap slots; a non-null placeholder while cap is 0
     head: usize = 0;                  // the slot of the first element

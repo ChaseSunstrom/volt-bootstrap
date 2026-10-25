@@ -73,6 +73,8 @@ above, after `@`, with what each does.
 | `@align(n)` | a fn or struct | a fn's code alignment; a struct's alignment (every value of it starts at a multiple of n), in bytes |
 | `@deprecated("why")` | a fn | using it warns with this message |
 | `@owns("field")` | a struct | it owns what this pointer field points to (for borrow checking) |
+| `@send`, `@sync` | a struct or enum | it's send (may move to another thread), or sync (may be shared between threads by reference), whenever its type arguments are, whatever its fields: for a type that guards its pointers. See [Send and sync](/volt-bootstrap/guide/traits/#send-and-sync) |
+| `@not_send`, `@not_sync` | a struct or enum | it isn't send, or sync, whatever its fields: a value tied to its thread |
 | `@thread_local` | a global `var` | each thread has its own copy |
 | `@cfg("key", "value")` | any item | the item is only in builds where this holds (as the builtin above) |
 | `@derive(trait, ...)` | a struct, an enum | attach these traits (std's derive when they aren't in scope) |

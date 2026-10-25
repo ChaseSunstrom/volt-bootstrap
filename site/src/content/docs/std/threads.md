@@ -52,6 +52,10 @@ fn main() -> !void {
 system won't start another thread. Like `box`, it takes an optional allocator for the closure's
 memory: `spawn(f, my_allocator)`. Call `std::thread::yield_now()` to let other threads run.
 
+The closure must be [send](/volt-bootstrap/guide/traits/#send-and-sync): one capturing a raw
+pointer, or a reference to something that isn't sync, warns where `spawn` is called. Capturing
+numbers, strings, std's containers and locks, or references to them is fine.
+
 ## Mutexes
 
 A `mutex<T>` holds a value that only one thread at a time can reach. `lock()` waits until the

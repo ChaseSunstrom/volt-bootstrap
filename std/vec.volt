@@ -2,7 +2,9 @@
 // (Part of package std: the package loader wraps every file in `namespace std`.)
 
 // A growable array that owns its elements. Nothing is allocated until the first push.
+// (send and sync when its items are: it owns them, behind the pointer)
 <T: type, Allocator: std::mem::allocator = std::mem::default_allocator>
+@attributes([@send, @sync])
 public struct vec {
     ptr: T* = @cast<T*>(@alignof(T)); // a non-null placeholder while cap is 0
     len: usize = 0;            // the elements held

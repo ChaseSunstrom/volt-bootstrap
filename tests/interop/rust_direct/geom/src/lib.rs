@@ -1222,3 +1222,8 @@ impl std::future::Future for Late {
 pub fn woken_after(ms: u64) -> impl std::future::Future<Output = u32> {
     Late { polls: 0, ms, state: None }
 }
+
+// a value given to another thread: T: Send is Volt's <T: send> (a type that isn't warns at the call)
+pub fn on_thread<T: Send + 'static>(x: T) -> usize {
+    std::thread::spawn(move || std::mem::size_of_val(&x)).join().unwrap()
+}

@@ -499,7 +499,9 @@ namespace fs {
         END,     // the end of the file
     }
 
-    // An open file, read and written through a buffer (C's FILE). Closed when it's deleted.
+    // An open file, read and written through a buffer (C's FILE). Closed when it's deleted. (Send and
+    // sync: C's FILE locks itself.)
+    @attributes([@send, @sync])
     public struct file {
         handle: void*;
         failed: bool = false; // a write through write_str (std::write) failed; flush reports it

@@ -656,7 +656,7 @@ fn read(desc: &str) -> (Model, Dotnet) {
                     }
                     _ => {}
                 }
-                m.methods.entry(tv).or_default().push(Sig { name, recv, params, ret, skip: None, src: f.get(3).unwrap_or(&"").to_string(), generics, call: None });
+                m.methods.entry(tv).or_default().push(Sig { name, recv, params, ret, skip: None, src: f.get(3).unwrap_or(&"").to_string(), generics, thread_bounds: Vec::new(), call: None });
             }
             "end" => {
                 m.types.extend(def.take());

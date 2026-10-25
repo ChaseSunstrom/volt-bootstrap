@@ -232,7 +232,7 @@ attach fn param_kind(this: checker&, gp: gparam&, e: u32) -> compile_error!pkind
     var all_types = true;
     for (b&) in gp.bounds.items() {
         val bt = *b ?? continue;
-        if (!(is_type_bound(bt) || this.bound_trait(bt, this.env_at(e).ns) != null)) {
+        if (!(is_type_bound(bt) || auto_bound_name(bt) != null || this.bound_trait(bt, this.env_at(e).ns) != null)) {
             all_types = false;
         }
     }

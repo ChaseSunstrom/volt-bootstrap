@@ -77,6 +77,9 @@ fn main() -> !void {
   explicit, `box<T>` owns heap memory. A `val` can't change, even through a reference to it passed
   on, returned or stored in a struct.
 - **Errors as values** (`E!T`, `try`, `catch`, `errdefer`) and **optionals** (`T?`, `??`, narrowing).
+- **Send and sync**: thread-safety traits the checker derives from what a type holds (no std,
+  no run-time cost); `std::thread::spawn` warns for a closure that can't go to another thread, and
+  Rust's `Send` and `Sync` bounds carry over.
 - **Templates** with specialization, packs and constant parameters; **traits** as constraints, and
   as tagged unions instead of vtables.
 - **Comptime**: functions, `if`, `match` and `for` that run in the compiler, types as values,

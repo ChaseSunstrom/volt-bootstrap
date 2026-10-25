@@ -176,6 +176,8 @@ pub struct Sig {
     /// a generic one's type parameters: Volt gets a generic declaration, and a function per
     /// instance a program uses (made with `call` set)
     pub generics: Vec<String>,
+    /// type parameters' Send and Sync bounds (Rust's), as Volt's: ("T", "send + sync")
+    pub thread_bounds: Vec<(String, String)>,
     /// an instance's callee in its own language (largest::<i32>), in place of name
     pub call: Option<String>,
 }
@@ -231,6 +233,9 @@ pub struct TraitInst {
 pub struct Model {
     pub fns: Vec<(Vec<String>, Sig)>,
     pub types: Vec<TypeDef>,
+    /// a type's thread safety where its language says (Rust's Send, then Sync: true, false for
+    /// !Send): its handle is marked @send, @not_send, @sync, @not_sync to match
+    pub threads: BTreeMap<String, [Option<bool>; 2]>,
     /// module, name, Volt type, Volt literal
     pub consts: Vec<(Vec<String>, String, String, String)>,
     /// methods by type name
@@ -1517,6 +1522,7 @@ impl<'a> Gen<'a> {
             Kind::Handle => {
                 let drop = self.sym(&[&mg, "drop"]);
                 let n = self.lang.name();
+                v.push_str(&self.thread_attrs(&def));
                 let _ = write!(v, "// a {n} {} (owned: deleting it frees it; lent: a reference into {n}'s value, never freed here)\nstruct {} {{\n    h: void* = null;\n    lent: bool = false;\n}}\n\nattach fn delete(this: {vp}&) -> void {{\n    if (this.h != null && !this.lent) {{\n        {ns}::{drop}(this.h);\n    }}\n    this.h = null;\n}}\n", def.name, def.name);
                 let decl = self.ext_fn(&drop, &["h: void*".to_string()], "void");
                 self.ext.push_str(&decl);
@@ -2258,6 +2264,25 @@ impl<'a> Gen<'a> {
         Some(k)
     }
 
+    /// a type's @send and @sync as its language says (Rust's Send and Sync), or nothing: a handle is
+    /// a pointer, which is neither
+    fn thread_attrs(&self, def: &TypeDef) -> String {
+        let mut a = Vec::new();
+        // (an instance of a generic type, Stack<i32>, as its type is: its items are numbers, strings
+        // and the crate's own types)
+        let base = def.rust_name.as_deref().and_then(|r| r.split('<').next()).unwrap_or(&def.name);
+        if let Some(&[send, sync]) = self.m.threads.get(&def.name).or_else(|| self.m.threads.get(base)) {
+            for (has, yes, no) in [(send, "@send", "@not_send"), (sync, "@sync", "@not_sync")] {
+                match has {
+                    Some(true) => a.push(yes),
+                    Some(false) => a.push(no),
+                    None => {}
+                }
+            }
+        }
+        if a.is_empty() { String::new() } else { format!("@attributes([{}])\n", a.join(", ")) }
+    }
+
     /// a generic function's Volt declaration: generic over its type parameters, marked
     /// @rust_generic (voltc calls the instance made for a call's types, NAME__T, and asks for the
     /// ones not made yet); its body only stands in until then
@@ -2287,7 +2312,10 @@ impl<'a> Gen<'a> {
         }
         path.push(s.name.clone());
         let path = path.join("::");
-        let tps: Vec<String> = s.generics.iter().map(|g| generic_param(g)).collect();
+        let tps: Vec<String> = s.generics.iter().map(|g| match s.thread_bounds.iter().find(|(n, _)| n == g) {
+            Some((_, b)) => format!("{g}: {b}"),
+            None => generic_param(g),
+        }).collect();
         let kw = if self_ty.is_some() { "attach fn" } else { "fn" };
         let mut f = String::new();
         if !s.src.is_empty() {

@@ -1155,7 +1155,7 @@ impl Reader<'_> {
                     if let Some(ie) = self.exprs.get(&format!("dyn_{iv}")).cloned() {
                         // Go's value of the interface (for a call, a slice or a map taking one): as_I()
                         let r = if f[3] == "ptr" { "&$r" } else { "$r" };
-                        let s = Sig { name: format!("as_{iv}"), recv: Recv::Ref, params: Vec::new(), ret: Some(Ty::Named(format!("dyn_{iv}"))), skip: None, src: format!("{ie}({r})"), generics: Vec::new(), call: Some(format!("=({ie})({r})")) };
+                        let s = Sig { name: format!("as_{iv}"), recv: Recv::Ref, params: Vec::new(), ret: Some(Ty::Named(format!("dyn_{iv}"))), skip: None, src: format!("{ie}({r})"), generics: Vec::new(), thread_bounds: Vec::new(), call: Some(format!("=({ie})({r})")) };
                         self.m.methods.entry(tv).or_default().push(s);
                     }
                 }
@@ -1249,8 +1249,8 @@ impl Reader<'_> {
                         let r = (|| -> Result<(Ty, Ty), String> { Ok((self.ty(g, Pos::Out)?, self.ty(g, Pos::In)?)) })();
                         match r {
                             Ok((o, i)) => {
-                                let get = Sig { name: f.clone(), recv: Recv::Ref, params: Vec::new(), ret: Some(o), skip: None, src: format!("field {f} {}", self.go_expr(g)), generics: Vec::new(), call: Some(format!("=$r.{f}")) };
-                                let set = Sig { name: format!("set_{f}"), recv: Recv::Ref, params: vec![("value".into(), Some(i))], ret: Some(Ty::Unit), skip: None, src: format!("field {f} {}", self.go_expr(g)), generics: Vec::new(), call: Some(format!("=$r.{f} = $0")) };
+                                let get = Sig { name: f.clone(), recv: Recv::Ref, params: Vec::new(), ret: Some(o), skip: None, src: format!("field {f} {}", self.go_expr(g)), generics: Vec::new(), thread_bounds: Vec::new(), call: Some(format!("=$r.{f}")) };
+                                let set = Sig { name: format!("set_{f}"), recv: Recv::Ref, params: vec![("value".into(), Some(i))], ret: Some(Ty::Unit), skip: None, src: format!("field {f} {}", self.go_expr(g)), generics: Vec::new(), thread_bounds: Vec::new(), call: Some(format!("=$r.{f} = $0")) };
                                 self.m.methods.entry(vn.to_string()).or_default().extend([get, set]);
                             }
                             Err(why) => self.m.left_out.push(format!("{vn}'s field {f} ({why})")),
@@ -1274,7 +1274,7 @@ impl Reader<'_> {
                 if self.traits.contains(n) {
                     self.m.impls.push((dyn_n.clone(), vn.to_string()));
                     // and a Volt value of a type attaching it, as Go's value of it
-                    let s = Sig { name: "new".into(), recv: Recv::None, params: vec![("value".into(), Some(Ty::Dyn(vn.to_string(), FnPass::Value)))], ret: Some(Ty::Named(dyn_n.clone())), skip: None, src: format!("{expr}(value)"), generics: Vec::new(), call: Some(format!("=({expr})($0)")) };
+                    let s = Sig { name: "new".into(), recv: Recv::None, params: vec![("value".into(), Some(Ty::Dyn(vn.to_string(), FnPass::Value)))], ret: Some(Ty::Named(dyn_n.clone())), skip: None, src: format!("{expr}(value)"), generics: Vec::new(), thread_bounds: Vec::new(), call: Some(format!("=({expr})($0)")) };
                     self.m.methods.entry(dyn_n).or_default().push(s);
                 }
             }
@@ -1316,7 +1316,7 @@ impl Reader<'_> {
     fn underlying(&mut self, vn: &str, expr: &str, u: &GT, mut def: TypeDef) -> Result<(), String> {
         def.rust_name = Some(expr.to_string());
         self.exprs.insert(vn.to_string(), expr.to_string());
-        let m = |name: &str, params: Vec<(&str, Ty)>, ret: Ty, call: String| Sig { name: name.into(), recv: Recv::Ref, params: params.into_iter().map(|(n, t)| (n.to_string(), Some(t))).collect(), ret: Some(ret), skip: None, src: String::new(), generics: Vec::new(), call: Some(format!("={call}")) };
+        let m = |name: &str, params: Vec<(&str, Ty)>, ret: Ty, call: String| Sig { name: name.into(), recv: Recv::Ref, params: params.into_iter().map(|(n, t)| (n.to_string(), Some(t))).collect(), ret: Some(ret), skip: None, src: String::new(), generics: Vec::new(), thread_bounds: Vec::new(), call: Some(format!("={call}")) };
         let mut ms: Vec<Sig> = Vec::new();
         match u {
             GT::Name(b, a) if a.is_empty() && (basic(b).is_some() || b == "uintptr") => {
@@ -1454,7 +1454,7 @@ impl Reader<'_> {
     /// static methods of type vn the shim makes: name, parameters, the Go expression (template)
     fn statics(&mut self, vn: &str, fs: &[(&str, Vec<(&str, Ty)>, String)]) {
         for (name, ps, call) in fs {
-            let s = Sig { name: name.to_string(), recv: Recv::None, params: ps.iter().map(|(n, t)| (n.to_string(), Some(t.clone()))).collect(), ret: Some(Ty::Named(vn.to_string())), skip: None, src: String::new(), generics: Vec::new(), call: Some(format!("={call}")) };
+            let s = Sig { name: name.to_string(), recv: Recv::None, params: ps.iter().map(|(n, t)| (n.to_string(), Some(t.clone()))).collect(), ret: Some(Ty::Named(vn.to_string())), skip: None, src: String::new(), generics: Vec::new(), thread_bounds: Vec::new(), call: Some(format!("={call}")) };
             self.m.methods.entry(vn.to_string()).or_default().push(s);
         }
     }
@@ -1816,7 +1816,7 @@ impl Reader<'_> {
             self.exprs.insert(vn.into(), "error".into());
             self.m.types.push(TypeDef { module: Vec::new(), name: vn.into(), generic: false, fields: None, variants: None, is_enum: false, clone: true, opaque: false, params: Vec::new(), rust_name: Some("error".into()) });
             self.statics(vn, &[("new", vec![("text", Ty::Str)], "errNew($0)".into())]);
-            let s = Sig { name: "Error".into(), recv: Recv::Ref, params: Vec::new(), ret: Some(Ty::Str), skip: None, src: "func (error) Error() string".into(), generics: Vec::new(), call: None };
+            let s = Sig { name: "Error".into(), recv: Recv::Ref, params: Vec::new(), ret: Some(Ty::Str), skip: None, src: "func (error) Error() string".into(), generics: Vec::new(), thread_bounds: Vec::new(), call: None };
             self.m.methods.entry(vn.into()).or_default().push(s);
         }
         Ok(Ty::Named(vn.into()))
@@ -2086,7 +2086,7 @@ impl Reader<'_> {
         };
         // a trait method's interface values: their handles (dyn_I), whichever way they go
         let (params, ret) = if in_trait { (params.into_iter().map(|(n, t)| (n, t.map(dyn_handle))).collect(), dyn_handle(ret)) } else { (params, ret) };
-        Ok(Sig { name: gs.name.clone(), recv, params, ret: Some(ret), skip: None, src: gs.src.clone(), generics: Vec::new(), call: None })
+        Ok(Sig { name: gs.name.clone(), recv, params, ret: Some(ret), skip: None, src: gs.src.clone(), generics: Vec::new(), thread_bounds: Vec::new(), call: None })
     }
 
     /// an exported constant: a val of its type (a named basic type's: { value: V })
@@ -2121,8 +2121,8 @@ impl Reader<'_> {
         match r {
             Ok((o, i)) => {
                 let src = format!("var {name} {}", self.go_expr(&g));
-                self.m.fns.push((Vec::new(), Sig { name: name.into(), recv: Recv::None, params: Vec::new(), ret: Some(o), skip: None, src: src.clone(), generics: Vec::new(), call: Some(format!("=m.{name}")) }));
-                self.m.fns.push((Vec::new(), Sig { name: format!("set_{name}"), recv: Recv::None, params: vec![("value".into(), Some(i))], ret: Some(Ty::Unit), skip: None, src, generics: Vec::new(), call: Some(format!("=m.{name} = $0")) }));
+                self.m.fns.push((Vec::new(), Sig { name: name.into(), recv: Recv::None, params: Vec::new(), ret: Some(o), skip: None, src: src.clone(), generics: Vec::new(), thread_bounds: Vec::new(), call: Some(format!("=m.{name}")) }));
+                self.m.fns.push((Vec::new(), Sig { name: format!("set_{name}"), recv: Recv::None, params: vec![("value".into(), Some(i))], ret: Some(Ty::Unit), skip: None, src, generics: Vec::new(), thread_bounds: Vec::new(), call: Some(format!("=m.{name} = $0")) }));
             }
             Err(why) => self.m.left_out.push(format!("{name} ({why})")),
         }

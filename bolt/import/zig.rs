@@ -512,7 +512,7 @@ impl Walker {
             Some(x) => copies(x),
             None => false,
         };
-        let sig = |n: String, recv: Recv, params: Vec<(String, Option<Ty>)>, ret: Option<Ty>, call: String, src: String| Sig { name: n, recv, params, ret, skip: None, src, generics: Vec::new(), call: Some(call) };
+        let sig = |n: String, recv: Recv, params: Vec<(String, Option<Ty>)>, ret: Option<Ty>, call: String, src: String| Sig { name: n, recv, params, ret, skip: None, src, generics: Vec::new(), thread_bounds: Vec::new(), call: Some(call) };
         let ms = self.m.methods.entry(name.to_string()).or_default();
         for (k, (f, _, t)) in fields.iter().enumerate() {
             let unit = *t == Some(Ty::Unit);
@@ -808,7 +808,7 @@ fn sig_in(head: &[Tok], owner: Option<&str>, outer: &[String]) -> Sig {
         Some(Tok::Id(n)) => n.clone(),
         _ => String::new(),
     };
-    let mut s = Sig { name, recv: Recv::None, params: Vec::new(), ret: None, skip: None, src: format!("pub {}", toks_line(head)), generics: Vec::new(), call: None };
+    let mut s = Sig { name, recv: Recv::None, params: Vec::new(), ret: None, skip: None, src: format!("pub {}", toks_line(head)), generics: Vec::new(), thread_bounds: Vec::new(), call: None };
     let mut c = Cur { t: head, i: 2 };
     if !c.is("(") {
         s.skip = Some("its parameters");

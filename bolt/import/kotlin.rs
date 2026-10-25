@@ -574,7 +574,7 @@ impl Parser {
     /// T::new for a constructor of owner's with these parameters (T::new_<first> when there's one)
     fn ctor(&mut self, owner: &str, params: Vec<(String, Option<Ty>)>, skip: Option<&'static str>) {
         let name = if self.taken.contains(&(owner.to_string(), "new".to_string())) { format!("new_{}", params.first().map_or("", |p| p.0.as_str())) } else { "new".into() };
-        let s = Sig { name, recv: Recv::None, params, ret: Some(Ty::SelfTy), skip, src: String::new(), generics: Vec::new(), call: None };
+        let s = Sig { name, recv: Recv::None, params, ret: Some(Ty::SelfTy), skip, src: String::new(), generics: Vec::new(), thread_bounds: Vec::new(), call: None };
         self.add(Some(owner), s, CallInfo { init: true, ..CallInfo::default() });
     }
 
@@ -632,7 +632,7 @@ impl Parser {
             return;
         }
         let recv = if owner.is_none() || statics { Recv::None } else { Recv::Ref };
-        let mut s = Sig { name, recv, params: Vec::new(), ret, skip: None, src, generics: Vec::new(), call: None };
+        let mut s = Sig { name, recv, params: Vec::new(), ret, skip: None, src, generics: Vec::new(), thread_bounds: Vec::new(), call: None };
         let spread = self.params(&items, owner, &mut s, &mut Vec::new());
         if generic {
             s.skip = Some("it's generic");
@@ -688,7 +688,7 @@ impl Parser {
         if m.private || self.no_ctor.contains(o) {
             return;
         }
-        let mut s = Sig { name: String::new(), recv: Recv::None, params: Vec::new(), ret: None, skip: None, src: String::new(), generics: Vec::new(), call: None };
+        let mut s = Sig { name: String::new(), recv: Recv::None, params: Vec::new(), ret: None, skip: None, src: String::new(), generics: Vec::new(), thread_bounds: Vec::new(), call: None };
         if self.params(&items, Some(o), &mut s, &mut Vec::new()).is_some() {
             s.skip = Some("a vararg constructor");
         }
@@ -787,7 +787,7 @@ impl Parser {
         // the primary constructor and its properties
         if let Some(items) = ctor {
             self.has_ctor.insert(name.clone());
-            let mut s = Sig { name: String::new(), recv: Recv::None, params: Vec::new(), ret: None, skip: None, src: String::new(), generics: Vec::new(), call: None };
+            let mut s = Sig { name: String::new(), recv: Recv::None, params: Vec::new(), ret: None, skip: None, src: String::new(), generics: Vec::new(), thread_bounds: Vec::new(), call: None };
             let mut props = Vec::new();
             if self.params(&items, Some(&name), &mut s, &mut props).is_some() {
                 s.skip = Some("a vararg constructor");
@@ -853,7 +853,7 @@ impl Parser {
     /// a property read as a method without arguments (statics: an object's or a companion's)
     fn property_method(&mut self, owner: &str, name: String, t: Option<Ty>, statics: bool) {
         let recv = if statics { Recv::None } else { Recv::Ref };
-        let s = Sig { name, recv, params: Vec::new(), ret: t, skip: None, src: String::new(), generics: Vec::new(), call: None };
+        let s = Sig { name, recv, params: Vec::new(), ret: t, skip: None, src: String::new(), generics: Vec::new(), thread_bounds: Vec::new(), call: None };
         self.add(Some(owner), s, CallInfo { prop: true, ..CallInfo::default() });
     }
 

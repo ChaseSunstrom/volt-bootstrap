@@ -224,3 +224,46 @@ A generic type attaches a generic trait for all its instances at once,
 std's allocator is a trait whose functions are templates: `std::mem::allocator` has
 `<T: type> fn malloc(this, count: usize = 1) -> mem_error!(T*)`, `realloc` and `free`, and
 `box<T, Allocator>` and `vec<T, Allocator>` work with any type that attaches it.
+
+## Send and sync
+
+Two traits are built into the checker, with no std needed: a **send** type's values may move to
+another thread, and a **sync** type's values may be shared between threads by reference. Nothing
+attaches them; a type is what it holds. Numbers, `bool`, `str`, `cstr` and C function pointers are
+both. A raw pointer (`T*`, `void*`) is neither. A reference `T&` (or a view `T[..]`) is both when
+`T` is sync. Arrays, tuples, optionals, error unions, structs, enums and trait values are what
+their parts are, a closure is what its captures are (a `&` capture is a reference), and a `fn(...)`
+value is neither, since what it calls can't be seen.
+
+A generic bound asks for them: `<T: send>`, `<T: sync>` or `<T: send + sync>`. A type that doesn't
+meet one warns where the generic is used, naming the part to blame. As with Volt's borrow findings,
+it's a warning, and the program still builds; nothing is checked at run time.
+`std::thread::spawn` bounds its closure by `send`:
+
+```volt
+use std::io;
+use std::thread;
+
+<T: send>
+fn hand_over(x: T) -> T {
+    return x;
+}
+
+fn main() -> void {
+    var n = 4;
+    var t = std::thread::spawn(|n&| () { std::println("{}", n); }) catch @panic("no thread");
+    t.join();
+    std::println("{}", hand_over(n));
+    // val p: i32* = &n; hand_over(p) warns: i32* isn't send, but hand_over's T must be: it's a raw
+    // pointer (i32*). A closure capturing p given to spawn warns the same way
+}
+// expect: 4
+// expect: 4
+```
+
+A type that guards its pointers says so. `@attributes([@send, @sync])` makes a struct or enum send
+and sync whenever its type arguments are, whatever its fields: std's `vec`, `map`, `deque`, `box`,
+`shared` and `file` are marked that way, and `arena` is `@send` but `@not_sync`. `@not_send` and
+`@not_sync` take them away from a type tied to its thread. Rust's `Send` and `Sync` carry over: a
+crate fn's `T: Send` is a `send` bound, and a crate type's handle is marked as rustdoc says (see
+[Volt calls Rust](/volt-bootstrap/interop/rust-and-zig/#volt-calls-rust)).

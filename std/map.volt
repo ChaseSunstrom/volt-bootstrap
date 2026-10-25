@@ -32,7 +32,9 @@ public fn map_mix(x: u64) -> u64 {
 
 // A hash map with open addressing: linear probing, and a removal shifts the entries after it back
 // into the gap, so there are no removed markers and a probe stops at the first empty slot.
+// (send and sync when its items are: it owns them, behind the pointer)
 <K: type, V: type, Allocator: std::mem::allocator = std::mem::default_allocator>
+@attributes([@send, @sync])
 public struct map {
     // slots and state are parallel arrays of cap slots; nothing is allocated until the first put. A key
     // and its value share a slot, so a hit reads one place

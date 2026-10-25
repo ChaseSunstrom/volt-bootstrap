@@ -68,8 +68,9 @@ impl Checker {
         out
     }
 
+    /// (send and sync too: stage 1's thread-safety bounds, which stage 0 doesn't check)
     fn is_type_bound(t: &Type) -> bool {
-        matches!(&t.kind, TypeKind::Path(p) if p.is_single() && p.segs[0].name == "type")
+        matches!(&t.kind, TypeKind::Path(p) if p.is_single() && matches!(p.segs[0].name.as_str(), "type" | "send" | "sync"))
     }
 
     /// the trait a bound names, with its generic args: a trait, or a struct marked

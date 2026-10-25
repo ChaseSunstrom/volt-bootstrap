@@ -74,8 +74,9 @@ namespace thread {
     }
 
     // run f, a closure with no parameters, on a new thread. f is moved there: what it captures by
-    // value or with move belongs to the thread
-    <F: type, A: std::mem::allocator = std::mem::default_allocator>
+    // value or with move belongs to the thread. It should be send (a raw pointer or a reference to
+    // something that isn't sync in it warns)
+    <F: send, A: std::mem::allocator = std::mem::default_allocator>
     public fn spawn(f: F, allocator: A = {}) -> spawn_error!thread {
         val p: job<F, A>* = allocator.malloc<job<F, A>>() catch return spawn_error::OUT_OF_MEMORY;
         @write(p, { run: run_job<F, A>, f: move f, allocator: move allocator });
@@ -158,7 +159,9 @@ namespace thread {
     // One value with several owners, on any threads: copy makes another owner (the count goes up
     // atomically), and the value is deleted with the last one. Reach the value with get(); to change it
     // from several threads, share a mutex<T> or atomics.
+    // (send and sync when its value is: the count is atomic)
     <T: type, Allocator: std::mem::allocator = std::mem::default_allocator>
+    @attributes([@send, @sync])
     public struct shared {
         ptr: shared_box<T>*; // null in an empty (default) shared
         allocator: Allocator; // what frees it

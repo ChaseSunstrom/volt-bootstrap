@@ -1111,7 +1111,7 @@ fn rust_direct() {
         let mut c = Command::new(&e.voltc);
         c.args(["run", "--backend", backend, "generics.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
         tools(&mut c);
-        assert_eq!(ok(c.output().unwrap(), "voltc run generics.volt"), "largest 9 1.5\nrepeat 3 7 0.5\npick b 1\nscaled 3 6\nstack 2 5 volt 4,5\npoints 1 bigger 8\nconst 12 <5> <volt>\n", "generics ({backend})");
+        assert_eq!(ok(c.output().unwrap(), "voltc run generics.volt"), "largest 9 1.5\nrepeat 3 7 0.5\npick b 1\nscaled 3 6\nstack 2 5 volt 4,5\npoints 1 bigger 8\nconst 12 <5> <volt>\nthread 4\n", "generics ({backend})");
     }
     // closures and traits both ways: Volt's into Rust (lent, or kept and dropped by Rust once: drops 2, and Rust's squares 2),
     // Rust's back as values Volt calls
@@ -1198,6 +1198,13 @@ fn rust_direct() {
     let o = c.output().unwrap();
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("dup<geom::shapes::Counter>") && err.contains("Counter: Clone"), "a rejected instance: {err}");
+    // a type that isn't Send given to a fn bound by Send: Volt's warning at the call, then rustc's error
+    let mut c = Command::new(&e.voltc);
+    c.args(["run", "threads_bad.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+    tools(&mut c);
+    let o = c.output().unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("warning: geom::Canvas isn't send, but on_thread's T must be: it's marked @not_send") && err.contains("cannot be sent between threads safely"), "a Send bound: {err}");
     // reading the crate (rustdoc documents it as the shim's dependency) writes nothing into it
     assert!(!dir.join("geom/Cargo.lock").exists() && !dir.join("geom/target").exists(), "the import wrote into the crate");
     // one .rs file is a crate of its own (its `mod x;` files next to it)

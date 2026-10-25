@@ -885,6 +885,9 @@ attach fn fn_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) -> c
     if (have) {
         return *have;
     }
+    if (args.len > 0) {
+        this.warn_auto_bounds(d, &args, span);
+    }
     // a generic Rust fn: the instance bolt made for these types, when it has
     if (args.len > 0) {
         val rg = this.rust_generic_of(d);

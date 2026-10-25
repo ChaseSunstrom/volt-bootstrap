@@ -1,0 +1,35 @@
+warning: raw isn't send, but give's T must be: p is a raw pointer (i32*)
+   ┌─ tests/diag/send_sync.volt:42:5
+   │
+42 │     give(r);
+   │     ^^^^^^^
+
+warning: holds isn't send, but give's T must be: r.p is a raw pointer (i32*)
+   ┌─ tests/diag/send_sync.volt:44:5
+   │
+44 │     give(h);
+   │     ^^^^^^^
+
+warning: pinned isn't send, but give's T must be: it's marked @not_send
+   ┌─ tests/diag/send_sync.volt:48:5
+   │
+48 │     give(pin);
+   │     ^^^^^^^^^
+
+warning: raw isn't sync, but share's T must be: p is a raw pointer (i32*)
+   ┌─ tests/diag/send_sync.volt:50:5
+   │
+50 │     share(&r);
+   │     ^^^^^^^^^
+
+warning: the closure isn't send, but spawn's F must be: q is a raw pointer (i32*)
+   ┌─ tests/diag/send_sync.volt:52:14
+   │
+52 │     val t1 = std::thread::spawn(|q| () { std::println("{}", *q); }) catch @panic("no thread");
+   │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: the closure isn't send, but spawn's F must be: r is a reference to raw, which isn't sync
+   ┌─ tests/diag/send_sync.volt:54:14
+   │
+54 │     val t3 = std::thread::spawn(|r&| () { std::println("{}", *r.p); }) catch @panic("no thread");
+   │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

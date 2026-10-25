@@ -266,7 +266,7 @@ impl Parser {
             }
             for (params, labels) in sigs {
                 let name = if self.taken.contains(&(t.clone(), "new".to_string())) { format!("new_{}", labels.first().cloned().unwrap_or_default()) } else { "new".into() };
-                let s = Sig { name, recv: Recv::None, params, ret: Some(Ty::SelfTy), skip: None, src: String::new(), generics: Vec::new(), call: None };
+                let s = Sig { name, recv: Recv::None, params, ret: Some(Ty::SelfTy), skip: None, src: String::new(), generics: Vec::new(), thread_bounds: Vec::new(), call: None };
                 self.add(Some(&t), s, CallInfo { labels, init: true, owner: t.clone(), is_static: true, ..CallInfo::default() });
             }
         }
@@ -539,7 +539,7 @@ impl Parser {
             Some(_) if m.mutating => Recv::Mut,
             Some(_) => Recv::Ref,
         };
-        let mut s = Sig { name, recv, params: Vec::new(), ret: if throws { ret.map(|t| Ty::Res(Box::new(t))) } else { ret }, skip: None, src, generics: Vec::new(), call: None };
+        let mut s = Sig { name, recv, params: Vec::new(), ret: if throws { ret.map(|t| Ty::Res(Box::new(t))) } else { ret }, skip: None, src, generics: Vec::new(), thread_bounds: Vec::new(), call: None };
         let labels = Self::params(&items, owner, &mut s);
         if generic {
             s.skip = Some("it's generic");
@@ -610,7 +610,7 @@ impl Parser {
         if throws {
             ret = Ty::Res(Box::new(ret));
         }
-        let mut s = Sig { name: String::new(), recv: Recv::None, params: Vec::new(), ret: Some(ret), skip: None, src: String::new(), generics: Vec::new(), call: None };
+        let mut s = Sig { name: String::new(), recv: Recv::None, params: Vec::new(), ret: Some(ret), skip: None, src: String::new(), generics: Vec::new(), thread_bounds: Vec::new(), call: None };
         let labels = Self::params(&items, owner, &mut s);
         s.name = if self.taken.contains(&(o.to_string(), "new".to_string())) { format!("new_{}", labels.first().filter(|l| *l != "_").cloned().unwrap_or_default()) } else { "new".into() };
         if generic {
@@ -827,7 +827,7 @@ impl Parser {
         if m.private {
             return;
         }
-        let s = Sig { name, recv: Recv::Ref, params: Vec::new(), ret: if get_throws { ty.map(|t| Ty::Res(Box::new(t))) } else { ty }, skip: m.barred, src: String::new(), generics: Vec::new(), call: None };
+        let s = Sig { name, recv: Recv::Ref, params: Vec::new(), ret: if get_throws { ty.map(|t| Ty::Res(Box::new(t))) } else { ty }, skip: m.barred, src: String::new(), generics: Vec::new(), thread_bounds: Vec::new(), call: None };
         let info = CallInfo { prop: true, owner: o.to_string(), asyn: get_async, own_main: m.main || self.scope_main, nonisolated: m.nonisolated || self.scope_nonisolated, ..CallInfo::default() };
         self.add(owner, s, info);
     }

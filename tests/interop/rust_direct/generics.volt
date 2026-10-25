@@ -27,4 +27,6 @@ fn main() -> void {
     std::println("points {} bigger {}", pts.len(), geom::bigger(&a, &b));
     val arr: i32[3] = { 4, 5, 6 };
     std::println("const {} {} {}", geom::lead<3>(arr[..]), geom::show(5), geom::show("volt"));
+    // a Send bound (Volt's send): an i32 is
+    std::println("thread {}", geom::on_thread(7));
 }

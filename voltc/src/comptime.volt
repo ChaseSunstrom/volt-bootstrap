@@ -4556,6 +4556,10 @@ fn attr_defs() -> std::vec<attr_def> {
     put(&v, { name: "align", args: 1, sig: "@align(n)", doc: "a fn's code alignment, or a struct's (every value of it starts at a multiple of n), in bytes" });
     put(&v, { name: "deprecated", args: 1, sig: "@deprecated(\"why\")", doc: "calling this fn warns with this message" });
     put(&v, { name: "owns", args: 1, sig: "@owns(\"field\")", doc: "the struct owns what this pointer field points to (for borrow checking)" });
+    put(&v, { name: "send", args: 0, sig: "@send", doc: "this struct or enum is send (may move to another thread) whenever its type arguments are, whatever its fields: for a type that guards its pointers" });
+    put(&v, { name: "sync", args: 0, sig: "@sync", doc: "this struct or enum is sync (may be shared between threads by reference) whenever its type arguments are, whatever its fields" });
+    put(&v, { name: "not_send", args: 0, sig: "@not_send", doc: "this struct or enum isn't send, whatever its fields: a value tied to its thread" });
+    put(&v, { name: "not_sync", args: 0, sig: "@not_sync", doc: "this struct or enum isn't sync, whatever its fields" });
     put(&v, { name: "cpp_type", args: 1, sig: "@cpp_type(\"ns::Class\")", doc: "this struct is that C++ class (use cpp writes it)" });
     put(&v, { name: "cpp_handle", args: 1, sig: "@cpp_handle(\"ns::Class\")", doc: "this struct holds that C++ class by handle (use cpp writes it); a method it doesn't have is worked out by clang per use" });
     put(&v, { name: "cpp_call", args: 1, sig: "@cpp_call(\"ns::f\")", doc: "a C++ name called per use: clang works out each call (use cpp writes it)" });

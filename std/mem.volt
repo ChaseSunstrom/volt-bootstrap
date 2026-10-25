@@ -333,7 +333,9 @@ namespace mem {
     // Memory that goes all at once: blocks come from chunks taken from backing, frees do nothing
     // (except for the last block, whose room comes back), and deleting or resetting the arena gives
     // every chunk back. Allocate through allocator(); the arena has to outlive what's allocated from it.
+    // (send, not sync: it hands out memory without a lock)
     <B: allocator = default_allocator>
+    @attributes([@send, @not_sync])
     public struct arena {
         backing: B = {};             // where the chunks come from
         head: arena_chunk* = null;   // the newest chunk
@@ -461,7 +463,7 @@ namespace mem {
     // @owns("ptr"): box is used like a T&, and when it goes out of scope *ptr is deleted first,
     // then box's own delete (below) frees the memory. Any library can make such a type
     <T: type, Allocator: allocator = default_allocator>
-    @attributes([@owns("ptr")])
+    @attributes([@owns("ptr"), @send, @sync])
     public struct box {
         ptr: T*; // raw: the memory the box owns
         allocator: Allocator; // what frees ptr
