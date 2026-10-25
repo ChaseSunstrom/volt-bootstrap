@@ -364,6 +364,16 @@ fn instances(m: &mut Model, lines: &[String], alias: &str, lib: &str, skip: &BTr
     made
 }
 
+/// &Vec<T> or &mut Vec<T> (both readers): a borrowed Vec the shim makes from Volt's T[..] (a slice,
+/// as a result), and of a number Volt's vec written back after the call; a &mut one of anything else
+/// is left out (a slice can't pass where Rust takes &mut Vec<T>)
+fn vec_ref(e: Box<Ty>, mutable: bool) -> Option<Ty> {
+    if mutable && !matches!(*e, Ty::Prim(_)) {
+        return None;
+    }
+    Some(Ty::Ref(Box::new(Ty::Vec(e)), mutable))
+}
+
 /// what an Rc<T> or Arc<T> may share: values whose out stores read them through a reference
 /// (numbers, chars, String, the crate's plain structs and enums, Vecs of those or of text), not a
 /// handle (one would have to move out of it)
@@ -1319,9 +1329,7 @@ impl<'a> Doc<'a> {
             }
             return match self.ty(inner)? {
                 Ty::String if !mutable => Some(Ty::Str),
-                // &mut Vec<T> of a number: Volt's vec, written back (a push shows)
-                Ty::Vec(e) if mutable && matches!(*e, Ty::Prim(_)) => Some(Ty::Ref(Box::new(Ty::Vec(e)), true)),
-                Ty::Vec(e) => Some(Ty::Slice(e, mutable)),
+                Ty::Vec(e) => vec_ref(e, mutable),
                 x @ (Ty::Named(_) | Ty::SelfTy | Ty::Generic(_)) => Some(Ty::Ref(Box::new(x), mutable)),
                 x @ (Ty::Prim(_) | Ty::Char) if !mutable => Some(x),
                 // a map or set: Volt's copied into a Rust one for the call (a &mut one's written back)
@@ -1846,7 +1854,7 @@ fn parse_ty(t: &[Tok]) -> Option<Ty> {
                 [Tok::P(o), inner @ .., Tok::P(c)] if o == "[" && c == "]" => Some(Ty::Slice(Box::new(parse_ty(inner)?), mutable)),
                 _ => match parse_ty(rest)? {
                     Ty::String if !mutable => Some(Ty::Str),
-                    Ty::Vec(e) => Some(Ty::Slice(e, mutable)),
+                    Ty::Vec(e) => vec_ref(e, mutable),
                     t @ (Ty::Named(_) | Ty::SelfTy) => Some(Ty::Ref(Box::new(t), mutable)),
                     t @ (Ty::Prim(_) | Ty::Char) if !mutable => Some(t),
                     _ => None,
@@ -2109,6 +2117,12 @@ impl Lang for Rust {
             Ty::Boxed(x) if matches!(**x, Ty::Named(_) | Ty::Prim(_) | Ty::Char | Ty::String | Ty::Vec(_)) => {
                 let mut q = self.param(g, x, a)?;
                 q.arg = format!("Box::new({})", q.arg);
+                return Some(q);
+            }
+            // &Vec<T> of numbers, text or the crate's plain structs and enums: a Vec made for the call
+            Ty::Ref(l, false) if matches!(&**l, Ty::Vec(e) if shared_value(g, e) || matches!(**e, Ty::Str)) => {
+                let mut q = self.param(g, l, a)?;
+                q.arg = format!("&{}", q.arg);
                 return Some(q);
             }
             // Rc<T> or Arc<T> of a value (&Rc<T>: lent): one made for the call
@@ -2484,6 +2498,11 @@ impl Lang for Rust {
             Ty::Ptr(x, _) if matches!(**x, Ty::Prim(_)) => {
                 let Ty::Prim(x) = **x else { return None };
                 ShimOut { params: vec![format!("{o}: *mut *mut {x}")], store: format!("*{o} = $v as *mut {x};") }
+            }
+            // &Vec<T>: as a slice of it
+            Ty::Ref(l, false) if matches!(**l, Ty::Vec(_)) => {
+                let Ty::Vec(e) = &**l else { return None };
+                return self.out(g, &Ty::Slice(e.clone(), false), o, owned);
             }
             // the value an Rc or Arc shares, read through it (a copy)
             Ty::Shared(x, _) if shared_value(g, x) => {

@@ -60,6 +60,7 @@ fn main() -> void {
     val ns: i32[2] = { 1, 2 };
     val an = geom::arc_nums();
     std::println("shared {} {} {} {} {}", spt.x, geom::rc_len(ns[..]), geom::arc_name("abcd"), an.len, an[2]);
+    std::println("vec {}", geom::vec_total(pv.items()));
 }
 // expect: maps 3 5 3
 // expect: scaled 3 4
@@ -71,3 +72,4 @@ fn main() -> void {
 // expect: cow HI THERE as is
 // expect: written 4 4 2 2 1 true false 8
 // expect: shared 1.5 2 4 3 6
+// expect: vec 13

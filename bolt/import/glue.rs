@@ -991,6 +991,11 @@ impl<'a> Gen<'a> {
         Some(match t {
             // the boxed value itself (the other side unboxes it)
             Ty::Boxed(x) | Ty::Shared(x, _) => return self.volt_out(x, o),
+            // (a reference to a Vec: as a slice of it)
+            Ty::Ref(l, false) if matches!(**l, Ty::Vec(_)) => {
+                let Ty::Vec(e) = &**l else { return None };
+                return self.volt_out(&Ty::Slice(e.clone(), false), o);
+            }
             Ty::Cow(x) => return self.volt_out(x, o),
             Ty::Ptr(x, _) if matches!(**x, Ty::Prim(_)) => {
                 let Ty::Prim(x) = **x else { return None };

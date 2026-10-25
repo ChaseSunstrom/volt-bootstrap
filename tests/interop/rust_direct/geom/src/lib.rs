@@ -1173,3 +1173,9 @@ pub fn arc_name(s: &std::sync::Arc<String>) -> usize {
 pub fn arc_nums() -> std::sync::Arc<Vec<i32>> {
     std::sync::Arc::new(vec![4, 5, 6])
 }
+
+// &Vec<T>: a Vec made for the call
+#[allow(clippy::ptr_arg)]
+pub fn vec_total(v: &Vec<i32>) -> i32 {
+    v.iter().sum()
+}
