@@ -75,6 +75,16 @@ fn kinds() -> void {
 
     // an extern fn: the C symbol, linked from impl.zig
     std::println("extern {} {}", kd::zig_ext_add(2, 3), kd::zig_ext_win(4));
+    // a pointer to a number, a fixed array, and slices of the file's struct
+    var cnt: i32 = 5;
+    kd::bumpBy(&cnt, 3);
+    val arr3: f32[3] = { 1.0, 2.0, 3.5 };
+    val f3 = kd::firstThree(7);
+    var rs: kd::Rect[2] = { { w: 1.0, h: 2.0 }, { w: 3.0, h: 1.0 } };
+    val before = kd::totalArea(rs[..]);
+    kd::growAll(rs[..]);
+    val made = kd::rects(3);
+    std::println("zig more {} {} {} {} {} {} {} {}", cnt, kd::peek(&cnt), kd::sumThree(arr3[..]), f3[2], before, rs[0].w, made.len, made[2].w);
 }
 
 fn run() -> fm::zig_error!void {

@@ -905,10 +905,15 @@ fn parse_ty_in(t: &[Tok], owner: Option<&str>, gens: &[String]) -> Option<Ty> {
                 _ => (true, rest),
             };
             match parse_ty(rest, owner)? {
-                x @ (Ty::Named(_) | Ty::SelfTy) => Some(Ty::Ref(Box::new(x), mutable)),
+                x @ (Ty::Named(_) | Ty::SelfTy | Ty::Prim(_)) => Some(Ty::Ref(Box::new(x), mutable)),
                 _ => None,
             }
         }
+        // [N]T: a fixed array of numbers
+        [Tok::P(a), Tok::Num(n), Tok::P(b), rest @ ..] if a == "[" && b == "]" => match parse_ty(rest, owner)? {
+            e @ Ty::Prim(_) => Some(Ty::Array(Box::new(e), n.replace('_', "").parse().ok()?)),
+            _ => None,
+        },
         _ if is(0, "[") && is(1, "]") => {
             let (mutable, rest) = match &t[2..] {
                 [Tok::Id(c), rest @ ..] if c == "const" => (false, rest),
@@ -916,7 +921,7 @@ fn parse_ty_in(t: &[Tok], owner: Option<&str>, gens: &[String]) -> Option<Ty> {
             };
             match parse_ty(rest, owner)? {
                 Ty::Prim("u8") if !mutable => Some(Ty::Str),
-                e @ (Ty::Prim(_) | Ty::Str | Ty::Generic(_)) => Some(Ty::Slice(Box::new(e), mutable)),
+                e @ (Ty::Prim(_) | Ty::Str | Ty::Generic(_) | Ty::Named(_)) => Some(Ty::Slice(Box::new(e), mutable)),
                 _ => None,
             }
         }
@@ -1032,8 +1037,42 @@ impl Lang for Zig {
                     p.pre.extend([format!("const {a}_v = strs({a}, {a}_n);"), format!("defer alloc.free({a}_v);")]);
                     p.arg = format!("{a}_v");
                 }
+                // the file's plain structs: Volt's mirrors, copied into a Zig slice (written back
+                // when the slice is mutable)
+                Ty::Named(_) => {
+                    let ti = g.info(e).filter(|ti| ti.kind == Kind::Plain)?;
+                    let (zp, mg) = (Self::path(&ti.def), Gen::mangle(&ti.def));
+                    p.params.extend([format!("{a}: ?[*]V_{mg}"), format!("{a}_n: usize")]);
+                    p.pre.extend([
+                        format!("const {a}_v = alloc.alloc({zp}, {a}_n) catch @panic(\"out of memory\");"),
+                        format!("defer alloc.free({a}_v);"),
+                        format!("for (slm(V_{mg}, {a}, {a}_n), 0..) |x, i| {a}_v[i] = from_{mg}(x);"),
+                    ]);
+                    if *mutable {
+                        p.post.push(format!("for ({a}_v, 0..) |x, i| slm(V_{mg}, {a}, {a}_n)[i] = to_{mg}(x);"));
+                    }
+                    p.arg = format!("{a}_v");
+                }
                 _ => return None,
             },
+            // [N]T: Volt's T[..], which must hold N
+            Ty::Array(e, n) => {
+                let Ty::Prim(x) = **e else { return None };
+                p.params.extend([format!("{a}: ?[*]const {x}"), format!("{a}_n: usize")]);
+                p.pre.push(format!("if ({a}_n != {n}) std.debug.panic(\"an array of {n} given {{d}} elements\", .{{{a}_n}});"));
+                p.arg = format!("sl({x}, {a}, {a}_n)[0..{n}].*");
+            }
+            // *T of a number: Volt's, which the call may change; *const T: its value's copy
+            Ty::Ref(x, mutable) if matches!(**x, Ty::Prim(_)) => {
+                let Ty::Prim(x) = **x else { return None };
+                if *mutable {
+                    p.params.push(format!("{a}: *{x}"));
+                    p.arg = a.to_string();
+                } else {
+                    p.params.push(format!("{a}: {x}"));
+                    p.arg = format!("&{a}");
+                }
+            }
             Ty::Opt(inner) => match &**inner {
                 Ty::Prim(x) => {
                     p.params.extend([format!("{a}_has: bool"), format!("{a}: {x}")]);
@@ -1146,8 +1185,18 @@ impl Lang for Zig {
             Ty::Str => ShimOut { params: vec![format!("{o}: *?[*]u8"), format!("{o}_n: *usize")], store: format!("{put}(u8, $v, {o}, {o}_n);") },
             Ty::Slice(e, _) => match **e {
                 Ty::Prim(x) => ShimOut { params: vec![format!("{o}: *?[*]{x}"), format!("{o}_n: *usize")], store: format!("{put}({x}, $v, {o}, {o}_n);") },
+                Ty::Named(_) => {
+                    let ti = g.info(e).filter(|ti| ti.kind == Kind::Plain)?;
+                    let mg = Gen::mangle(&ti.def);
+                    let free = if owned { " alloc.free($v);" } else { "" };
+                    ShimOut { params: vec![format!("{o}: *?[*]V_{mg}"), format!("{o}_n: *usize")], store: format!("{{ const {o}_d = alloc.alloc(V_{mg}, $v.len) catch @panic(\"out of memory\"); for ($v, 0..) |x, i| {o}_d[i] = to_{mg}(x); {o}.* = {o}_d.ptr; {o}_n.* = {o}_d.len;{free} }}") }
+                }
                 _ => return None,
             },
+            Ty::Array(e, _) => {
+                let Ty::Prim(x) = **e else { return None };
+                ShimOut { params: vec![format!("{o}: *?[*]{x}"), format!("{o}_n: *usize")], store: format!("put_copy({x}, &$v, {o}, {o}_n);") }
+            }
             Ty::Named(_) => {
                 let ti = g.info(t)?;
                 let (zp, mg) = (Self::path(&ti.def), Gen::mangle(&ti.def));
@@ -1337,6 +1386,21 @@ impl Lang for Zig {
         for x in &g.vec_elems {
             let _ = writeln!(s, "export fn {}(p: ?[*]{x}, n: usize) void {{\n    if (p) |q| alloc.free(q[0..n]);\n}}\n", free(&format!("{x}s")));
         }
+        let mut ptrs = false;
+        for n in &g.elem_types {
+            let Some(ti) = g.types.get(n) else { continue };
+            match ti.kind {
+                Kind::Plain => {
+                    let mg = Gen::mangle(&ti.def);
+                    let _ = writeln!(s, "export fn {}(p: ?[*]V_{mg}, n: usize) void {{\n    if (p) |q| alloc.free(q[0..n]);\n}}\n", free(&format!("{mg}s")));
+                }
+                Kind::Handle => ptrs = true,
+                Kind::Enum => {}
+            }
+        }
+        if ptrs {
+            let _ = writeln!(s, "export fn {}(p: ?[*]?*anyopaque, n: usize) void {{\n    if (p) |q| alloc.free(q[0..n]);\n}}\n", free("ptrs"));
+        }
         s
     }
 }
@@ -1365,7 +1429,10 @@ mod tests {
         assert_eq!(ty("shapes.Point"), Some(Ty::Named("Point".into())));
         assert_eq!(ty("void"), Some(Ty::Unit));
         assert_eq!(ty("c_int"), Some(Ty::Prim("i32")));
-        assert_eq!(ty("[4]u8"), None);
+        assert_eq!(ty("[4]u8"), Some(Ty::Array(Box::new(Ty::Prim("u8")), 4)));
+        assert_eq!(ty("*i32"), Some(Ty::Ref(Box::new(Ty::Prim("i32")), true)));
+        assert_eq!(ty("[]const shapes.Point"), Some(Ty::Slice(Box::new(Ty::Named("Point".into())), false)));
+        assert_eq!(ty("[4][]const u8"), None);
         assert_eq!(ty("type"), None);
     }
 

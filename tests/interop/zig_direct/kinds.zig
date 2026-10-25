@@ -197,3 +197,37 @@ pub extern fn zig_ext_win(a: i32) callconv(win_cc) i32;
 pub extern "c" fn zig_ext_len(s: []const u8) usize;
 pub extern fn zig_ext_auto(a: i32) callconv(.auto) i32;
 pub extern fn zig_ext_naked() callconv(.naked) void;
+
+// a pointer to a number, a fixed array, and slices of the file's struct (copies of Volt's mirrors,
+// a mutable one written back)
+pub fn bumpBy(p: *i32, by: i32) void {
+    p.* += by;
+}
+
+pub fn peek(p: *const i32) i32 {
+    return p.*;
+}
+
+pub fn sumThree(xs: [3]f32) f32 {
+    return xs[0] + xs[1] + xs[2];
+}
+
+pub fn firstThree(n: i32) [3]i32 {
+    return .{ n, n + 1, n + 2 };
+}
+
+pub fn totalArea(rs: []const Rect) f32 {
+    var t: f32 = 0;
+    for (rs) |r| t += r.w * r.h;
+    return t;
+}
+
+pub fn growAll(rs: []Rect) void {
+    for (rs) |*r| r.w += 1;
+}
+
+pub fn rects(allocator: std.mem.Allocator, n: usize) []Rect {
+    const out = allocator.alloc(Rect, n) catch @panic("out of memory");
+    for (out, 0..) |*r, i| r.* = .{ .w = @floatFromInt(i), .h = 2 };
+    return out;
+}

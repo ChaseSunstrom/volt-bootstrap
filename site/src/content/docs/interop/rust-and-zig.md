@@ -182,8 +182,11 @@ fn main() -> !void {
 | integers, `f32`, `f64`, `bool`, `c_int` and the like | the same |
 | `[]const u8` (`[]u8` too, as a result) | `str` in, `std::string` out |
 | `[]const T`, `[]T`, `[]const []const u8` | `T[..]`, `str[..]` in; `std::vec<T>` out |
+| `[]const T`, `[]T` of a struct passed by value (below) | `T[..]` in: Zig gets a copy of Volt's structs, and a `[]T`'s changes come back; `std::vec<T>` out (a slice the function made with the allocator it was given is freed) |
+| `[N]T` of a number | `T[..]` in, which must hold N (else the program stops); `std::vec<T>` out |
 | `?T` | `T?` |
 | `*T`, `*const T` of a struct | `T&` |
+| `*T`, `*const T` of a number | `T&` (`kd::bumpBy(&n, 3)`): a `*T` is Volt's own, so Zig's change shows; a `*const T` points at a copy |
 | `E!T`, `!T` | `zig_error!T`; the error's name is in `zig_error::ERROR` |
 | `std.mem.Allocator` parameter | none: the shim passes Volt's allocator (the program's `std::mem::default_allocator`, as a `std.mem.Allocator`), so what Zig allocates is Volt's memory (not the C library's `malloc`), and `--leak-check` counts it |
 | `comptime T: type`, `x: anytype` (and `@TypeOf(x)`), `comptime n: usize` | a generic fn: `<T: type>`, `<T_x: type>`, `<n: usize>` |
