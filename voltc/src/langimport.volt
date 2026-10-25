@@ -165,11 +165,13 @@ attach fn import_lang(this: checker&, lang: str, args: std::vec<std::string>&, a
     put(this.files, { name: this.intern(move fname), text: text });
     val file = @cast<u32>(this.files.len - 1);
     this.import_outs.put(file, copy out);
-    val toks = try lex(text, file);
+    var toks = try lex(text, file);
     var names: std::map<str, bool> = {};
     collect_generic_names(&toks, &names);
     var p: parser = { src: text, toks: &toks, pos: 0, generics: &names };
     val items = try p.parse_file();
+    // (kept as long as the items: their string literals point into the tokens)
+    put(&this.import_toks, move toks);
     put(&this.cpp_items, bx(move items));
     val n = this.ns_child(ns, alias);
     return this.collect(*this.cpp_items.at(this.cpp_items.len - 1), n);

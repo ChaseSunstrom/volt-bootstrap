@@ -540,6 +540,7 @@ struct checker {
     importing_c: bool = false;          // collecting a C import's items
     owned_items: std::vec<std::box<item>> = {}; // items made by the checker (C imports)
     c_texts: std::vec<std::string> = {};  // preprocessed C headers the imported items' names point into
+    import_toks: std::vec<std::vec<token>> = {}; // an import's tokens: its items' string literals (an extern's "C") point into them
     // use cpp (cppimport.volt): the #include lines, the generated items, and the extern "C" wrappers
     // @cpp calls became (their C++ text, what each wraps, their ir fns)
     cpp_includes: std::vec<str> = {};

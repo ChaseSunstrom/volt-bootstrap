@@ -8270,11 +8270,13 @@ attach fn import_cpp(this: checker&, headers: std::vec<std::string>&, alias: str
     val text = this.c_texts.at(this.c_texts.len - 1).as_str();
     put(this.files, { name: this.intern(move fname), text: text });
     val file = @cast<u32>(this.files.len - 1);
-    val toks = try lex(text, file);
+    var toks = try lex(text, file);
     var names: std::map<str, bool> = {};
     collect_generic_names(&toks, &names);
     var p: parser = { src: text, toks: &toks, pos: 0, generics: &names };
     val items = try p.parse_file();
+    // (kept as long as the items: their string literals point into the tokens)
+    put(&this.import_toks, move toks);
     put(&this.cpp_items, bx(move items));
     return this.collect(*this.cpp_items.at(this.cpp_items.len - 1), n);
 }
@@ -9227,11 +9229,12 @@ attach fn cpp_declare(this: checker&, k: usize, text: std::string, label: std::s
     val src = this.c_texts.at(this.c_texts.len - 1).as_str();
     put(this.files, { name: this.intern(move label), text: src });
     val file = @cast<u32>(this.files.len - 1);
-    val toks = try lex(src, file);
+    var toks = try lex(src, file);
     var names: std::map<str, bool> = {};
     collect_generic_names(&toks, &names);
     var p: parser = { src: src, toks: &toks, pos: 0, generics: &names };
     val items = try p.parse_file();
+    put(&this.import_toks, move toks);
     put(&this.cpp_items, bx(move items));
     val first = this.decls.len;
     val at = this.cpp_items.len - 1;
