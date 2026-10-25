@@ -120,6 +120,9 @@ fn kinds() -> void {
     val b2 = sq.get(2) ?? @panic("no 2");
     val lg = wl.get(std::string::from("longer")) ?? @panic("no longer");
     std::println(" zig fn {} {} {} {} {} {}", twice, big, sq.len, *b2, wl.len, *lg);
+    // an ArrayList of the file's struct
+    val rl = kd::rectList(3);
+    std::println("zig list {} {} {}", rl.len, rl[2].w, kd::widest(rl.items()));
 }
 
 fn run() -> fm::zig_error!void {

@@ -982,11 +982,12 @@ fn parse_ty_in(t: &[Tok], owner: Option<&str>, gens: &[String]) -> Option<Ty> {
         }
         // std's containers of numbers: Volt's std::vec and std::map (copies)
         [Tok::Id(sd), Tok::P(d), Tok::Id(c), Tok::P(a), inner @ .., Tok::P(b)] if sd == "std" && d == "." && a == "(" && b == ")" => {
-            let args: Vec<Ty> = split_commas(inner).iter().map(|p| parse_ty(p, owner).filter(|t| matches!(t, Ty::Prim(_)))).collect::<Option<_>>()?;
+            let args: Vec<Ty> = split_commas(inner).iter().map(|p| parse_ty(p, owner)).collect::<Option<_>>()?;
             match (c.as_str(), &args[..]) {
-                ("ArrayList", [e]) => Some(Ty::Vec(Box::new(e.clone()))),
-                ("AutoHashMap", [k, v]) => Some(Ty::Map(Box::new(k.clone()), Box::new(v.clone()))),
-                ("StringHashMap", [v]) => Some(Ty::Map(Box::new(Ty::String), Box::new(v.clone()))),
+                // (of numbers, or of the file's structs: param and out take the plain ones)
+                ("ArrayList", [e @ (Ty::Prim(_) | Ty::Named(_))]) => Some(Ty::Vec(Box::new(e.clone()))),
+                ("AutoHashMap", [k @ Ty::Prim(_), v @ Ty::Prim(_)]) => Some(Ty::Map(Box::new(k.clone()), Box::new(v.clone()))),
+                ("StringHashMap", [v @ Ty::Prim(_)]) => Some(Ty::Map(Box::new(Ty::String), Box::new(v.clone()))),
                 _ => None,
             }
         }
@@ -1164,6 +1165,20 @@ impl Lang for Zig {
             }
             // *const std.ArrayList(T): a list made from Volt's T[..] for the call; *std.ArrayList(T):
             // Volt's std::vec<T>&, the list's items copied back when the call ends (an error too)
+            // (*const std.ArrayList of the file's plain struct: one of Volt's mirrors' conversions)
+            Ty::Ref(l, false) if matches!(&**l, Ty::Vec(e) if matches!(**e, Ty::Named(_))) => {
+                let Ty::Vec(e) = &**l else { return None };
+                let ti = g.info(e).filter(|ti| ti.kind == Kind::Plain)?;
+                let (zp, mg) = (Self::path(&ti.def), Gen::mangle(&ti.def));
+                p.params.extend([format!("{a}: ?[*]V_{mg}"), format!("{a}_n: usize")]);
+                p.pre.extend([
+                    format!("var {a}_l: std.ArrayList({zp}) = .empty;"),
+                    format!("defer {a}_l.deinit(alloc);"),
+                    format!("{a}_l.ensureTotalCapacity(alloc, {a}_n) catch @panic(\"out of memory\");"),
+                    format!("for (slm(V_{mg}, {a}, {a}_n)) |{a}_x| {a}_l.appendAssumeCapacity(from_{mg}({a}_x));"),
+                ]);
+                p.arg = format!("&{a}_l");
+            }
             Ty::Ref(l, mutable) if matches!(**l, Ty::Vec(_)) => {
                 let Ty::Vec(e) = &**l else { return None };
                 let Ty::Prim(x) = **e else { return None };
@@ -1389,8 +1404,14 @@ impl Lang for Zig {
             }
             // std.ArrayList(T): its items copied
             Ty::Vec(e) => {
-                let Ty::Prim(x) = **e else { return None };
                 let (bind, free) = if owned { ("var", format!(" {o}_l.deinit(alloc);")) } else { ("const", String::new()) };
+                if let Ty::Named(_) = **e {
+                    // (of the file's plain struct: its mirrors)
+                    let ti = g.info(e).filter(|ti| ti.kind == Kind::Plain)?;
+                    let mg = Gen::mangle(&ti.def);
+                    return Some(ShimOut { params: vec![format!("{o}: *?[*]V_{mg}"), format!("{o}_n: *usize")], store: format!("{{ {bind} {o}_l = $v; const {o}_d = alloc.alloc(V_{mg}, {o}_l.items.len) catch @panic(\"out of memory\"); for ({o}_l.items, 0..) |{o}_x, {o}_i| {o}_d[{o}_i] = to_{mg}({o}_x); {o}.* = {o}_d.ptr; {o}_n.* = {o}_d.len;{free} }}") });
+                }
+                let Ty::Prim(x) = **e else { return None };
                 ShimOut { params: vec![format!("{o}: *?[*]{x}"), format!("{o}_n: *usize")], store: format!("{{ {bind} {o}_l = $v; put_copy({x}, {o}_l.items, {o}, {o}_n);{free} }}") }
             }
             // a hash map: its keys and values as two arrays (text keys copied)

@@ -354,3 +354,16 @@ pub fn bumpKey(m: *std.AutoHashMap(u32, u64), k: u32) void {
 pub fn tagWord(m: *std.StringHashMap(usize), w: []const u8) void {
     m.put(w, w.len) catch @panic("out of memory");
 }
+
+// an ArrayList of the file's struct: copies of Volt's mirrors each way
+pub fn rectList(allocator: std.mem.Allocator, n: usize) std.ArrayList(Rect) {
+    var l: std.ArrayList(Rect) = .empty;
+    for (0..n) |i| l.append(allocator, .{ .w = @floatFromInt(i + 1), .h = 1 }) catch @panic("out of memory");
+    return l;
+}
+
+pub fn widest(l: *const std.ArrayList(Rect)) f32 {
+    var w: f32 = 0;
+    for (l.items) |r| w = @max(w, r.w);
+    return w;
+}
