@@ -811,6 +811,21 @@ impl<'a> Gen<'a> {
                     p.ext.extend([format!("{a}: u8*"), format!("{a}_n: usize")]);
                     p.args.extend([a.clone(), format!("{a}_n")]);
                 }
+                // the import's plain struct (a pointer to a copy, null when none) or enum (its tag),
+                // and whether there's one
+                Ty::Named(_) if self.info(inner).is_some_and(|ti| ti.kind != Kind::Handle) => {
+                    let ti = self.info(inner)?;
+                    let (vp, mg, kind) = (self.volt_path(&ti.def), Self::mangle(&ti.def), ti.kind);
+                    p.param = format!("{vn}: {vp}?");
+                    if kind == Kind::Plain {
+                        p.pre.extend([format!("var {a}_l: {vp}? = {vn};"), format!("var {a}: {vp}* = null;"), format!("if ({a}_l) {{ {a} = &{a}_l; }}")]);
+                        p.ext.extend([format!("{a}_has: bool"), format!("{a}: {vp}*")]);
+                    } else {
+                        p.pre.extend([format!("var {a}: i64 = 0;"), format!("if ({vn}) {{ {a} = {ns}::tag_{mg}({vn}); }}")]);
+                        p.ext.extend([format!("{a}_has: bool"), format!("{a}: i64")]);
+                    }
+                    p.args.extend([format!("{vn} != null"), a.clone()]);
+                }
                 _ => return None,
             },
             Ty::Named(_) | Ty::Ref(..) => {

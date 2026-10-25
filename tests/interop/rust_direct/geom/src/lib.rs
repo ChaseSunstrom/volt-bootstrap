@@ -1079,3 +1079,8 @@ pub fn read_ptr(p: *const i32) -> i32 {
 pub fn bump_ptr(p: *mut i32) {
     unsafe { *p += 1 }
 }
+
+// an Option of the crate's enum and struct, from Volt
+pub fn describe_opt(c: Option<Color>, p: Option<Point>) -> String {
+    format!("{c:?} {p:?}")
+}

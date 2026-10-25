@@ -71,6 +71,7 @@ fn main() -> void {
     var w: walker = { calls: 0 };
     std::println("visit {}", geom::run_visit(&w));
     std::println("calls {}", w.calls);
+    std::println("opt {} / {}", geom::describe_opt(geom::Color::Blue, null), geom::describe_opt(null, { x: 1.0, y: 2.0 } as geom::Point));
 }
 // expect: map 2 1
 // expect: nudge 1 6
@@ -81,3 +82,4 @@ fn main() -> void {
 // expect: spots [0, 0, 0] [3, 4, 7]
 // expect: visit Some(Point { x: 10.0, y: 3.0 }) None ["xs1", "xs2", "xs3"] Point { x: -5.0, y: 6.0 } ((14, Blue), (14, Green)) 2 [true, false]
 // expect: calls 2
+// expect: opt Some(Blue) None / None Some(Point { x: 1.0, y: 2.0 })

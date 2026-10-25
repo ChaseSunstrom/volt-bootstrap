@@ -2263,6 +2263,18 @@ impl Lang for Rust {
                     let conv = if **inner == Ty::String { ".to_string()" } else { "" };
                     p.arg = format!("if {a}.is_null() {{ None }} else {{ Some(s({a}, {a}_n){conv}) }}");
                 }
+                // the crate's plain struct (a pointer to Volt's copy) or enum (its tag)
+                Ty::Named(_) if g.info(inner).is_some_and(|ti| ti.kind != Kind::Handle) => {
+                    let ti = g.info(inner)?;
+                    let mg = Gen::mangle(&ti.def);
+                    if ti.kind == Kind::Plain {
+                        p.params.extend([format!("{a}_has: bool"), format!("{a}: *const V_{mg}")]);
+                        p.arg = format!("if {a}_has {{ Some(from_{mg}(&*{a})) }} else {{ None }}");
+                    } else {
+                        p.params.extend([format!("{a}_has: bool"), format!("{a}: i64")]);
+                        p.arg = format!("if {a}_has {{ Some(from_{mg}({a})) }} else {{ None }}");
+                    }
+                }
                 _ => return None,
             },
             Ty::Named(_) | Ty::Ref(..) => {
