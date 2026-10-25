@@ -1151,6 +1151,11 @@ fn rust_direct() {
         c.args(["run", "--backend", backend, "more.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
         tools(&mut c);
         assert_eq!(ok(c.output().unwrap(), "voltc run more.volt"), expect("more.volt"), "more ({backend})");
+        // maps and sets as Volt's (copies), a Box<T> as T, raw pointers as T*
+        let mut c = Command::new(&e.voltc);
+        c.args(["run", "--backend", backend, "maps.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+        tools(&mut c);
+        assert_eq!(ok(c.output().unwrap(), "voltc run maps.volt"), expect("maps.volt"), "maps ({backend})");
         // Volt closures and a Volt type's trait methods taking and giving structs, enums,
         // handles, Vec, slices, arrays, Option and tuples
         let mut c = Command::new(&e.voltc);

@@ -1037,3 +1037,45 @@ pub fn run_visit(v: &mut dyn Visit) -> String {
     let made = v.made().total();
     format!("{at:?} {none:?} {many:?} {p:?} {sized:?} {made} {:?}", v.flags())
 }
+
+// maps, sets, a Box and raw pointers: a Volt std::map and std::set (copies), the boxed value
+// itself, and a Volt T*
+pub fn word_counts(text: &str) -> std::collections::HashMap<String, i32> {
+    let mut m = std::collections::HashMap::new();
+    for w in text.split(' ') {
+        *m.entry(w.to_string()).or_insert(0) += 1;
+    }
+    m
+}
+
+pub fn total_counts(m: &std::collections::HashMap<String, i32>) -> i32 {
+    m.values().sum()
+}
+
+pub fn scaled(m: std::collections::BTreeMap<i32, f64>, k: f64) -> std::collections::BTreeMap<i32, f64> {
+    m.into_iter().map(|(a, b)| (a, b * k)).collect()
+}
+
+pub fn evens_of(s: &std::collections::HashSet<i32>) -> std::collections::HashSet<i32> {
+    s.iter().filter(|x| *x % 2 == 0).copied().collect()
+}
+
+pub fn initials(words: std::collections::BTreeSet<String>) -> String {
+    words.iter().filter_map(|w| w.chars().next()).collect()
+}
+
+pub fn boxed_point(x: f64) -> Box<Point> {
+    Box::new(Point::new(x, x * 2.0))
+}
+
+pub fn unbox(p: Box<Point>) -> f64 {
+    p.x + p.y
+}
+
+pub fn read_ptr(p: *const i32) -> i32 {
+    unsafe { *p }
+}
+
+pub fn bump_ptr(p: *mut i32) {
+    unsafe { *p += 1 }
+}

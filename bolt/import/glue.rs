@@ -75,6 +75,15 @@ pub enum Ty {
     /// an out parameter (C#'s), by its name: the shim passes a local of its own, and the Volt
     /// function has no parameter for it (the result names it: a tuple's element, or the value)
     Out(Box<Ty>, String),
+    /// a map (Rust's HashMap and BTreeMap): a Volt std::map<K, V>, copied each way
+    Map(Box<Ty>, Box<Ty>),
+    /// a set (Rust's HashSet and BTreeSet): a Volt std::set<T>, copied each way
+    Set(Box<Ty>),
+    /// a boxed value (Rust's Box<T> of a type that isn't a trait): the T itself, which the shim
+    /// boxes going in and unboxes coming out
+    Boxed(Box<Ty>),
+    /// a raw pointer to a number (Rust's *const T, *mut T): a Volt T*, the same address
+    Ptr(Box<Ty>, bool),
 }
 
 /// an enum's variant, with its fields' names (a tuple variant's are 0, 1..) and types
@@ -391,6 +400,8 @@ struct VoltOut {
 }
 
 pub struct Gen<'a> {
+    /// map_of and set_of are in the helpers (coll_helpers)
+    colls: bool,
     pub m: &'a Model,
     pub alias: String,
     pub lang: &'a dyn Lang,
@@ -506,7 +517,7 @@ impl<'a> Gen<'a> {
                 err_sets.insert(e.clone(), e.clone());
             }
         }
-        Gen { m, alias: alias.to_string(), lang, types, vec_elems: BTreeSet::new(), elem_types: BTreeSet::new(), strs: false, errors: false, shim: String::new(), ext: String::new(), helpers: String::new(), modules: BTreeMap::new(), left_out: Vec::new(), syms: BTreeSet::new(), sigs: BTreeSet::new(), tramps: Vec::new(), fn_handles: Vec::new(), fn_tys: Vec::new(), traits, made_traits: BTreeSet::new(), made_foreign: BTreeSet::new(), block: None, put_string: false, pushes: BTreeMap::new(), err_sets }
+        Gen { colls: false, m, alias: alias.to_string(), lang, types, vec_elems: BTreeSet::new(), elem_types: BTreeSet::new(), strs: false, errors: false, shim: String::new(), ext: String::new(), helpers: String::new(), modules: BTreeMap::new(), left_out: Vec::new(), syms: BTreeSet::new(), sigs: BTreeSet::new(), tramps: Vec::new(), fn_handles: Vec::new(), fn_tys: Vec::new(), traits, made_traits: BTreeSet::new(), made_foreign: BTreeSet::new(), block: None, put_string: false, pushes: BTreeMap::new(), err_sets }
     }
 
     /// the Volt declaration of shim function sym (params: "name: type"): an extern "C" fn, or for
@@ -581,6 +592,9 @@ impl<'a> Gen<'a> {
             Ty::Opt(x) => Ty::Opt(Box::new(self.resolve(*x, self_ty))),
             Ty::Res(x) => Ty::Res(Box::new(self.resolve(*x, self_ty))),
             Ty::Vec(x) => Ty::Vec(Box::new(self.resolve(*x, self_ty))),
+            Ty::Map(k, v) => Ty::Map(Box::new(self.resolve(*k, self_ty)), Box::new(self.resolve(*v, self_ty))),
+            Ty::Set(x) => Ty::Set(Box::new(self.resolve(*x, self_ty))),
+            Ty::Boxed(x) => Ty::Boxed(Box::new(self.resolve(*x, self_ty))),
             Ty::Slice(x, m) => Ty::Slice(Box::new(self.resolve(*x, self_ty)), m),
             Ty::Array(x, n) => Ty::Array(Box::new(self.resolve(*x, self_ty)), n),
             Ty::Tuple(es) => Ty::Tuple(es.into_iter().map(|(n, t)| (n, self.resolve(t, self_ty))).collect()),
@@ -609,7 +623,42 @@ impl<'a> Gen<'a> {
         let vn = Self::param_name(name);
         let ns = self.shim_ns();
         let mut p = VoltParam::default();
+        // (a reference to a map or set: lent as the map itself is)
+        let t = match t {
+            Ty::Ref(x, false) if matches!(**x, Ty::Map(..) | Ty::Set(_)) => &**x,
+            t => t,
+        };
         match t {
+            // the boxed value itself (the other side boxes it)
+            Ty::Boxed(x) => return self.volt_param_at(name, x, &a, i),
+            // a pointer to a number: Volt's, the same address
+            Ty::Ptr(x, _) if matches!(**x, Ty::Prim(_)) => {
+                let Ty::Prim(x) = **x else { return None };
+                p.param = format!("{vn}: {x}*");
+                p.ext.push(format!("{a}: {x}*"));
+                p.args.push(vn);
+            }
+            // a map: Volt's, lent; its keys and values in two arrays (numbers as they are, text as
+            // strs), which the other side copies into a map of its own
+            Ty::Map(k, v) => {
+                let (kt, kpush, kext) = coll_elem(k)?;
+                let (vt, vpush, vext) = coll_elem(v)?;
+                p.param = format!("{vn}: std::map<{kt}, {vt}>&");
+                p.pre.push(format!("var {a}_k: std::vec<{}> = {{}};", push_ty(&kt)));
+                p.pre.push(format!("var {a}_v: std::vec<{}> = {{}};", push_ty(&vt)));
+                p.pre.push(format!("for (e) in {vn}.iter() {{\n        {a}_k.push({}) catch @panic(\"out of memory\");\n        {a}_v.push({}) catch @panic(\"out of memory\");\n    }}", kpush.replace("$e", "e.key"), vpush.replace("$e", "e.value")));
+                p.ext.extend([format!("{a}_k: {kext}"), format!("{a}_v: {vext}"), format!("{a}_n: usize")]);
+                p.args.extend([format!("@cast<{kext}>({a}_k.items().ptr)"), format!("@cast<{vext}>({a}_v.items().ptr)"), format!("{a}_k.len")]);
+            }
+            // a set: the same, its elements in one array
+            Ty::Set(x) => {
+                let (xt, xpush, xext) = coll_elem(x)?;
+                p.param = format!("{vn}: std::set<{xt}>&");
+                p.pre.push(format!("var {a}_k: std::vec<{}> = {{}};", push_ty(&xt)));
+                p.pre.push(format!("for (x) in {vn}.iter() {{\n        {a}_k.push({}) catch @panic(\"out of memory\");\n    }}", xpush.replace("$e", "x")));
+                p.ext.extend([format!("{a}: {xext}"), format!("{a}_n: usize")]);
+                p.args.extend([format!("@cast<{xext}>({a}_k.items().ptr)"), format!("{a}_k.len")]);
+            }
             Ty::Prim(x) => {
                 p.param = format!("{vn}: {x}");
                 p.ext.push(format!("{a}: {x}"));
@@ -813,9 +862,42 @@ impl<'a> Gen<'a> {
     }
 
     /// a returned value's Volt side (its out parameters are named o...)
+    /// map_of and set_of (once): a Volt map from its keys and values, a set from its elements
+    fn coll_helpers(&mut self) {
+        if self.colls {
+            return;
+        }
+        self.colls = true;
+        self.helpers.push_str("\n    // a map from its keys and values (a map result's two lists)\n    <K: type, V: type>\n    fn map_of(ks: std::vec<K>, vs: std::vec<V>) -> std::map<K, V> {\n        var m: std::map<K, V> = {};\n        for (i) in 0..ks.len {\n            m.put(copy ks[i], copy vs[i]);\n        }\n        return m;\n    }\n\n    // a set from its elements (a set result's list)\n    <T: type>\n    fn set_of(xs: std::vec<T>) -> std::set<T> {\n        var s: std::set<T> = {};\n        for (i) in 0..xs.len {\n            s.add(copy xs[i]);\n        }\n        return s;\n    }\n");
+    }
+
     fn volt_out(&mut self, t: &Ty, o: &str) -> Option<VoltOut> {
         let ns = self.shim_ns();
         Some(match t {
+            // the boxed value itself (the other side unboxes it)
+            Ty::Boxed(x) => return self.volt_out(x, o),
+            Ty::Ptr(x, _) if matches!(**x, Ty::Prim(_)) => {
+                let Ty::Prim(x) = **x else { return None };
+                VoltOut { ext: vec![format!("{o}: {x}**")], locals: vec![format!("var {o}: {x}* = null;")], args: vec![format!("&{o}")], value: o.to_string(), ty: format!("{x}*") }
+            }
+            // a map: its keys and values as two lists (as a Vec's), made into a Volt map
+            Ty::Map(k, v) => {
+                coll_elem(k)?;
+                coll_elem(v)?;
+                let ko = self.volt_out(&Ty::Vec(k.clone()), &format!("{o}k"))?;
+                let vo = self.volt_out(&Ty::Vec(v.clone()), &format!("{o}v"))?;
+                self.coll_helpers();
+                let el = |t: &str| t.strip_prefix("std::vec<").and_then(|x| x.strip_suffix('>')).unwrap_or(t).to_string();
+                let ty = format!("std::map<{}, {}>", el(&ko.ty), el(&vo.ty));
+                VoltOut { ext: [ko.ext, vo.ext].concat(), locals: [ko.locals, vo.locals].concat(), args: [ko.args, vo.args].concat(), value: format!("{ns}::map_of({}, {})", ko.value, vo.value), ty }
+            }
+            Ty::Set(x) => {
+                coll_elem(x)?;
+                let xo = self.volt_out(&Ty::Vec(x.clone()), &format!("{o}k"))?;
+                self.coll_helpers();
+                let el = xo.ty.strip_prefix("std::vec<").and_then(|y| y.strip_suffix('>')).unwrap_or(&xo.ty).to_string();
+                VoltOut { ext: xo.ext, locals: xo.locals, args: xo.args, value: format!("{ns}::set_of({})", xo.value), ty: format!("std::set<{el}>") }
+            }
             Ty::Prim(x) => VoltOut { ext: vec![format!("{o}: {x}*")], locals: vec![format!("var {o}: {x} = {};", zero(x))], args: vec![format!("&{o}")], value: o.to_string(), ty: x.to_string() },
             Ty::Char => VoltOut { ext: vec![format!("{o}: u32*")], locals: vec![format!("var {o}: u32 = 0;")], args: vec![format!("&{o}")], value: o.to_string(), ty: "u32".into() },
             // a Rust closure: a handle (the value is returned, so its type gives the literal's)
@@ -2395,6 +2477,10 @@ pub fn substitute(t: &Ty, s: &BTreeMap<String, Ty>) -> Ty {
         Ty::Inst(n, args) => Ty::Inst(n.clone(), args.iter().map(|x| substitute(x, s)).collect()),
         Ty::Tuple(es) => Ty::Tuple(es.iter().map(|(n, t)| (n.clone(), substitute(t, s))).collect()),
         Ty::Out(e, n) => Ty::Out(Box::new(substitute(e, s)), n.clone()),
+        Ty::Map(k, v) => Ty::Map(Box::new(substitute(k, s)), Box::new(substitute(v, s))),
+        Ty::Set(e) => Ty::Set(Box::new(substitute(e, s))),
+        Ty::Boxed(e) => Ty::Boxed(Box::new(substitute(e, s))),
+        Ty::Ptr(e, m) => Ty::Ptr(Box::new(substitute(e, s)), *m),
         // a closure parameter's type stands for the closure itself
         Ty::Fn(ps, r, p, once) => Ty::Fn(ps.iter().map(|x| substitute(x, s)).collect(), Box::new(substitute(r, s)), *p, *once),
         // &T of text is str and of a Vec a slice, as the reader maps them; of a number it stays a
@@ -2431,11 +2517,28 @@ fn fails_of(m: &Model) -> BTreeSet<String> {
     out
 }
 
+/// a map's key or value, or a set's element, as Volt holds it: its Volt type, what's pushed for it
+/// ($e: a reference to it, or a pointer for a set's), and the extern pointer to an array of those
+/// (numbers as they are, text as strs)
+fn coll_elem(t: &Ty) -> Option<(String, String, String)> {
+    Some(match t {
+        Ty::Prim(x) => (x.to_string(), "*$e".into(), format!("{x}*")),
+        Ty::String => ("std::string".into(), "$e.as_str()".into(), "void*".into()),
+        _ => return None,
+    })
+}
+
+/// what an element pushes as (coll_elem): a std::string's text as a str
+fn push_ty(t: &str) -> &str {
+    if t == "std::string" { "str" } else { t }
+}
+
 /// whether a type mentions type parameter g
 fn mentions(t: &Ty, g: &str) -> bool {
     match t {
         Ty::Generic(x) => x == g,
-        Ty::Opt(x) | Ty::Res(x) | Ty::Vec(x) | Ty::Slice(x, _) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::Fails(x, _) | Ty::Future(x) => mentions(x, g),
+        Ty::Opt(x) | Ty::Res(x) | Ty::Vec(x) | Ty::Slice(x, _) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::Fails(x, _) | Ty::Future(x) | Ty::Set(x) | Ty::Boxed(x) | Ty::Ptr(x, _) => mentions(x, g),
+        Ty::Map(k, v) => mentions(k, g) || mentions(v, g),
         Ty::Tuple(es) => es.iter().any(|(_, t)| mentions(t, g)),
         Ty::Fn(ps, r, _, _) => ps.iter().any(|p| mentions(p, g)) || mentions(r, g),
         Ty::Inst(_, args) => args.iter().any(|a| mentions(a, g)),
@@ -2449,7 +2552,8 @@ fn value_use(m: &Model, name: &str) -> bool {
     fn names(t: &Ty, n: &str) -> bool {
         match t {
             Ty::Named(x) => x == n,
-            Ty::Opt(x) | Ty::Res(x) | Ty::Vec(x) | Ty::Slice(x, _) | Ty::Ref(x, _) | Ty::Array(x, _) => names(x, n),
+            Ty::Opt(x) | Ty::Res(x) | Ty::Vec(x) | Ty::Slice(x, _) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::Set(x) | Ty::Boxed(x) | Ty::Ptr(x, _) => names(x, n),
+            Ty::Map(k, v) => names(k, n) || names(v, n),
             Ty::Tuple(es) => es.iter().any(|(_, t)| names(t, n)),
             Ty::Fails(x, _) | Ty::Future(x) => names(x, n),
             Ty::Fn(ps, r, _, _) => ps.iter().any(|p| names(p, n)) || names(r, n),

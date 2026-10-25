@@ -58,6 +58,10 @@ which an editor's hover shows; Zig's and Go's do too.
 | `&str`, `String` | `str` in, `std::string` out (a copy) |
 | `&[T]`, `&mut [T]`, `Vec<T>` | `T[..]` in, `std::vec<T>` out; `&[&str]`, `Vec<String>`: `str[..]`, `std::vec<std::string>` |
 | `Option<T>` | `T?` |
+| `HashMap<K, V>`, `BTreeMap<K, V>` (by value or `&`), `K` and `V` numbers or `String` | `std::map<K, V>&` in (lent: Rust gets a map made from its entries), `std::map<K, V>` out (a copy) |
+| `HashSet<T>`, `BTreeSet<T>` (by value or `&`), `T` a number or `String` | `std::set<T>&` in, `std::set<T>` out, copied the same way |
+| `Box<T>` of a type that isn't a trait (a struct, a number, `String`, a `Vec`) | `T` itself: the shim boxes it going in and unboxes it coming out (`geom::unbox(geom::boxed_point(1.5))`) |
+| `*const T`, `*mut T` of a number | `T*`: the same address (`val p: i32* = &n; geom::bump_ptr(p);`) |
 | `Result<T, E>` with `E` one of the crate's enums (directly or through an alias like `type Result<T> = ...`) | `E!T`: a Volt error set of `E`'s variants, each with its fields (numbers, `char` as `u32`, text as `std::string`; a variant holding anything else carries the error's text), matched like an enum; named `E_error` when `E` is a value elsewhere too |
 | `Result<T, E>` with `E` one of the crate's structs whose public fields are numbers, `char`s or text | `E!T`: an error set of one variant, the struct's name, holding its fields in order (`.ParseFail(f) => f.0`); one used as a value elsewhere too is the set `E_error` |
 | any other `Result<T, E>` | `rust_error!T`; the `Err`'s text (`Display`, else `Debug`) is in `rust_error::ERROR` |

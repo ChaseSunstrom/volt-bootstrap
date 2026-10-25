@@ -364,6 +364,16 @@ fn instances(m: &mut Model, lines: &[String], alias: &str, lib: &str, skip: &BTr
     made
 }
 
+/// a map's key or value, or a set's element, as Volt hands it over (coll_elem in glue.rs): the
+/// extern pointer to an array of them, and Rust's value from one ($w: a reference to it)
+fn coll_in(t: &Ty) -> Option<(String, String)> {
+    Some(match t {
+        Ty::Prim(x) => (format!("*const {x}"), "*$w".into()),
+        Ty::String => ("*const VoltStr".into(), "s($w.p, $w.n).to_string()".into()),
+        _ => return None,
+    })
+}
+
 /// a type as Rust code names it from the shim
 fn rust_ty(t: &Ty, lib: &str, types: &BTreeMap<String, Vec<String>>) -> String {
     match t {
@@ -1264,6 +1274,11 @@ impl<'a> Doc<'a> {
             let own = q.get("self_type").and_then(|s| s.get("generic")).and_then(Json::str) == Some("Self");
             return own.then(|| Ty::Generic(q.get("name").and_then(Json::str).unwrap_or("_").to_string()));
         }
+        // a raw pointer to a number: a Volt T*
+        if let Some(rp) = t.get("raw_pointer") {
+            let inner = self.ty(rp.get("type")?)?;
+            return matches!(inner, Ty::Prim(_)).then(|| Ty::Ptr(Box::new(inner), rp.get("is_mutable").and_then(Json::bool) == Some(true)));
+        }
         if let Some(r) = t.get("borrowed_ref") {
             let mutable = r.get("is_mutable").and_then(Json::bool) == Some(true);
             let inner = r.get("type")?;
@@ -1285,6 +1300,8 @@ impl<'a> Doc<'a> {
                 Ty::Vec(e) => Some(Ty::Slice(e, mutable)),
                 x @ (Ty::Named(_) | Ty::SelfTy | Ty::Generic(_)) => Some(Ty::Ref(Box::new(x), mutable)),
                 x @ (Ty::Prim(_) | Ty::Char) if !mutable => Some(x),
+                // a map or set, lent: Volt's copied into a Rust one for the call
+                x @ (Ty::Map(..) | Ty::Set(_)) if !mutable => Some(Ty::Ref(Box::new(x), false)),
                 _ => None,
             };
         }
@@ -1330,6 +1347,10 @@ impl<'a> Doc<'a> {
             ("Vec", 1) => Some(Ty::Vec(one()?)),
             ("Option", 1) => Some(Ty::Opt(one()?)),
             ("Result", 1 | 2) => Some(Ty::Res(one()?)),
+            // Volt's std::map and std::set, copied each way; a Box<T> the T itself
+            ("HashMap" | "BTreeMap", 2) => Some(Ty::Map(one()?, Box::new(self.ty(args[1])?))),
+            ("HashSet" | "BTreeSet", 1) => Some(Ty::Set(one()?)),
+            ("Box", 1) => Some(Ty::Boxed(one()?)),
             (_, 0) if !shadowed && last.starts_with(|c: char| c.is_ascii_uppercase()) => Some(Ty::Named(last)),
             _ => None,
         }
@@ -2044,6 +2065,40 @@ impl Lang for Rust {
     fn param(&self, g: &Gen, t: &Ty, a: &str) -> Option<ShimParam> {
         let mut p = ShimParam::default();
         match t {
+            // a pointer to a number: Volt's address as it is
+            Ty::Ptr(x, m) if matches!(**x, Ty::Prim(_)) => {
+                let Ty::Prim(x) = **x else { return None };
+                p.params.push(format!("{a}: *{} {x}", if *m { "mut" } else { "const" }));
+                p.arg = a.to_string();
+            }
+            // the value, boxed for the call
+            Ty::Boxed(x) if matches!(**x, Ty::Named(_) | Ty::Prim(_) | Ty::Char | Ty::String | Ty::Vec(_)) => {
+                let mut q = self.param(g, x, a)?;
+                q.arg = format!("Box::new({})", q.arg);
+                return Some(q);
+            }
+            // a map or set (lent, &HashMap): a Rust one made from Volt's keys and values (elements)
+            Ty::Map(..) | Ty::Set(_) | Ty::Ref(..) if matches!(t, Ty::Map(..) | Ty::Set(_)) || matches!(t, Ty::Ref(x, false) if matches!(**x, Ty::Map(..) | Ty::Set(_))) => {
+                let (inner, lent) = match t {
+                    Ty::Ref(x, _) => (&**x, true),
+                    x => (x, false),
+                };
+                let made = match inner {
+                    Ty::Map(k, v) => {
+                        let (kp, kc) = coll_in(k)?;
+                        let (vp, vc) = coll_in(v)?;
+                        p.params.extend([format!("{a}_k: {kp}"), format!("{a}_v: {vp}"), format!("{a}_n: usize")]);
+                        format!("sl({a}_k, {a}_n).iter().zip(sl({a}_v, {a}_n).iter()).map(|(k, v)| ({}, {})).collect()", kc.replace("$w", "k"), vc.replace("$w", "v"))
+                    }
+                    Ty::Set(x) => {
+                        let (xp, xc) = coll_in(x)?;
+                        p.params.extend([format!("{a}: {xp}"), format!("{a}_n: usize")]);
+                        format!("sl({a}, {a}_n).iter().map(|x| {}).collect()", xc.replace("$w", "x"))
+                    }
+                    _ => return None,
+                };
+                p.arg = if lent { format!("&{made}") } else { made };
+            }
             Ty::Prim(x) => {
                 p.params.push(format!("{a}: {x}"));
                 p.arg = a.to_string();
@@ -2331,6 +2386,26 @@ impl Lang for Rust {
 
     fn out(&self, g: &Gen, t: &Ty, o: &str, owned: bool) -> Option<ShimOut> {
         Some(match t {
+            Ty::Ptr(x, _) if matches!(**x, Ty::Prim(_)) => {
+                let Ty::Prim(x) = **x else { return None };
+                ShimOut { params: vec![format!("{o}: *mut *mut {x}")], store: format!("*{o} = $v as *mut {x};") }
+            }
+            // the value out of its box
+            Ty::Boxed(x) if matches!(**x, Ty::Named(_) | Ty::Prim(_) | Ty::Char | Ty::String | Ty::Vec(_)) => {
+                let mut q = self.out(g, x, o, owned)?;
+                q.store = q.store.replace("$v", "(*$v)");
+                q
+            }
+            // a map: its keys and values as two Vecs; a set: its elements as one
+            Ty::Map(k, v) => {
+                let ko = self.out(g, &Ty::Vec(k.clone()), &format!("{o}k"), owned)?;
+                let vo = self.out(g, &Ty::Vec(v.clone()), &format!("{o}v"), owned)?;
+                ShimOut { params: [ko.params, vo.params].concat(), store: format!("{{ let (mk, mv): (Vec<_>, Vec<_>) = $v.into_iter().unzip(); {} {} }}", ko.store.replace("$v", "mk"), vo.store.replace("$v", "mv")) }
+            }
+            Ty::Set(x) => {
+                let xo = self.out(g, &Ty::Vec(x.clone()), &format!("{o}k"), owned)?;
+                ShimOut { params: xo.params, store: format!("{{ let ms: Vec<_> = $v.into_iter().collect(); {} }}", xo.store.replace("$v", "ms")) }
+            }
             Ty::Prim(x) => ShimOut { params: vec![format!("{o}: *mut {x}")], store: format!("*{o} = $v;") },
             Ty::Char => ShimOut { params: vec![format!("{o}: *mut u32")], store: format!("*{o} = $v as u32;") },
             Ty::Fn(ps, r, _, once) => {
