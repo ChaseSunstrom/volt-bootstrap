@@ -84,8 +84,8 @@ pub enum Ty {
     Boxed(Box<Ty>),
     /// a raw pointer to a number (Rust's *const T, *mut T): a Volt T*, the same address
     Ptr(Box<Ty>, bool),
-    /// Rust's Cow<str>: text (borrowed going in, copied coming out)
-    Cow,
+    /// Rust's Cow<str> or Cow<[T]>: what it holds (borrowed going in, copied coming out)
+    Cow(Box<Ty>),
 }
 
 /// an enum's variant, with its fields' names (a tuple variant's are 0, 1..) and types
@@ -636,7 +636,34 @@ impl<'a> Gen<'a> {
         match t {
             // the boxed value itself (the other side boxes it)
             Ty::Boxed(x) => return self.volt_param_at(name, x, &a, i),
-            Ty::Cow => return self.volt_param_at(name, &Ty::Str, &a, i),
+            Ty::Cow(x) => return self.volt_param_at(name, x, &a, i),
+            // a map or set the call may change (Rust's &mut HashMap): passed as a lent one is, its
+            // keys and values (elements) coming back in out lists that replace Volt's when the call
+            // ends (when the shim filled them: a panic leaves Volt's as it was)
+            Ty::Ref(m, true) if matches!(**m, Ty::Map(..) | Ty::Set(_)) => {
+                let mut q = self.volt_param_at(name, m, &a, i)?;
+                let (keys, vals) = match &**m {
+                    Ty::Map(k, v) => ((**k).clone(), Some((**v).clone())),
+                    Ty::Set(x) => ((**x).clone(), None),
+                    _ => return None,
+                };
+                let ko = self.volt_out(&Ty::Vec(Box::new(keys)), &format!("{a}_rk"))?;
+                q.ext.extend(ko.ext);
+                q.pre.extend(ko.locals);
+                q.args.extend(ko.args);
+                let fill = match vals {
+                    Some(v) => {
+                        let vo = self.volt_out(&Ty::Vec(Box::new(v)), &format!("{a}_rv"))?;
+                        q.ext.extend(vo.ext);
+                        q.pre.extend(vo.locals);
+                        q.args.extend(vo.args);
+                        format!("val {a}_ks = {};\n            val {a}_vs = {};\n            {vn}.clear();\n            for (i) in 0..{a}_ks.len {{\n                {vn}.put(copy {a}_ks[i], copy {a}_vs[i]);\n            }}", ko.value, vo.value)
+                    }
+                    None => format!("val {a}_ks = {};\n            {vn}.clear();\n            for (i) in 0..{a}_ks.len {{\n                {vn}.add(copy {a}_ks[i]);\n            }}", ko.value),
+                };
+                q.pre.push(format!("defer {{\n        if ({a}_rk != null) {{\n            {fill}\n        }}\n    }}"));
+                return Some(q);
+            }
             // a list the call may change (Zig's *std.ArrayList(T)): Volt's vec, its items passed and
             // the list's copied back over them when the call ends
             Ty::Ref(l, true) if matches!(&**l, Ty::Vec(e) if matches!(**e, Ty::Prim(_))) => {
@@ -648,7 +675,7 @@ impl<'a> Gen<'a> {
                 p.pre.extend([
                     format!("var {a}_o: {x}* = null;"),
                     format!("var {a}_on: usize = 0;"),
-                    format!("defer {{\n        val {a}_w = {ns}::take_{x}s({a}_o, {a}_on);\n        {vn}.clear();\n        {vn}.extend({a}_w.items()) catch @panic(\"out of memory\");\n    }}"),
+                    format!("defer {{\n        if ({a}_o != null) {{\n            val {a}_w = {ns}::take_{x}s({a}_o, {a}_on);\n            {vn}.clear();\n            {vn}.extend({a}_w.items()) catch @panic(\"out of memory\");\n        }}\n    }}"),
                 ]);
                 p.args.extend([format!("@cast<{x}*>({vn}.items().ptr)"), format!("{vn}.len"), format!("&{a}_o"), format!("&{a}_on")]);
             }
@@ -960,7 +987,7 @@ impl<'a> Gen<'a> {
         Some(match t {
             // the boxed value itself (the other side unboxes it)
             Ty::Boxed(x) => return self.volt_out(x, o),
-            Ty::Cow => return self.volt_out(&Ty::Str, o),
+            Ty::Cow(x) => return self.volt_out(x, o),
             Ty::Ptr(x, _) if matches!(**x, Ty::Prim(_)) => {
                 let Ty::Prim(x) = **x else { return None };
                 VoltOut { ext: vec![format!("{o}: {x}**")], locals: vec![format!("var {o}: {x}* = null;")], args: vec![format!("&{o}")], value: o.to_string(), ty: format!("{x}*") }

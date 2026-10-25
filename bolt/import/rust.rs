@@ -1307,11 +1307,13 @@ impl<'a> Doc<'a> {
             }
             return match self.ty(inner)? {
                 Ty::String if !mutable => Some(Ty::Str),
+                // &mut Vec<T> of a number: Volt's vec, written back (a push shows)
+                Ty::Vec(e) if mutable && matches!(*e, Ty::Prim(_)) => Some(Ty::Ref(Box::new(Ty::Vec(e)), true)),
                 Ty::Vec(e) => Some(Ty::Slice(e, mutable)),
                 x @ (Ty::Named(_) | Ty::SelfTy | Ty::Generic(_)) => Some(Ty::Ref(Box::new(x), mutable)),
                 x @ (Ty::Prim(_) | Ty::Char) if !mutable => Some(x),
-                // a map or set, lent: Volt's copied into a Rust one for the call
-                x @ (Ty::Map(..) | Ty::Set(_)) if !mutable => Some(Ty::Ref(Box::new(x), false)),
+                // a map or set: Volt's copied into a Rust one for the call (a &mut one's written back)
+                x @ (Ty::Map(..) | Ty::Set(_)) => Some(Ty::Ref(Box::new(x), mutable)),
                 _ => None,
             };
         }
@@ -1361,7 +1363,12 @@ impl<'a> Doc<'a> {
             ("HashMap" | "BTreeMap", 2) => Some(Ty::Map(one()?, Box::new(self.ty(args[1])?))),
             ("HashSet" | "BTreeSet", 1) => Some(Ty::Set(one()?)),
             ("Box", 1) => Some(Ty::Boxed(one()?)),
-            ("Cow", 1) if args[0].get("primitive").and_then(Json::str) == Some("str") => Some(Ty::Cow),
+            // Cow<str> and Cow<[T]> of a number: what it holds
+            ("Cow", 1) if args[0].get("primitive").and_then(Json::str) == Some("str") => Some(Ty::Cow(Box::new(Ty::Str))),
+            ("Cow", 1) if args[0].get("slice").is_some() => match self.ty(args[0].get("slice")?)? {
+                e @ Ty::Prim(_) => Some(Ty::Cow(Box::new(Ty::Slice(Box::new(e), false)))),
+                _ => None,
+            },
             (_, 0) if !shadowed && last.starts_with(|c: char| c.is_ascii_uppercase()) => Some(Ty::Named(last)),
             _ => None,
         }
@@ -2224,9 +2231,43 @@ impl Lang for Rust {
                 p.params.extend([format!("{a}: *const u8"), format!("{a}_n: usize")]);
                 p.arg = if *t == Ty::String { format!("s({a}, {a}_n).to_string()") } else { format!("s({a}, {a}_n)") };
             }
-            Ty::Cow => {
-                p.params.extend([format!("{a}: *const u8"), format!("{a}_n: usize")]);
-                p.arg = format!("::std::borrow::Cow::Borrowed(s({a}, {a}_n))");
+            Ty::Cow(x) => {
+                let mut q = self.param(g, x, a)?;
+                q.arg = format!("::std::borrow::Cow::Borrowed({})", q.arg);
+                return Some(q);
+            }
+            // &mut Vec<T> of a number: a Vec of Volt's items, handed back after the call
+            Ty::Ref(l, true) if matches!(&**l, Ty::Vec(e) if matches!(**e, Ty::Prim(_))) => {
+                let Ty::Vec(e) = &**l else { return None };
+                let Ty::Prim(x) = **e else { return None };
+                p.params.extend([format!("{a}: *const {x}"), format!("{a}_n: usize"), format!("{a}_o: *mut *mut {x}"), format!("{a}_on: *mut usize")]);
+                p.pre.push(format!("let mut {a}_v: Vec<{x}> = sl({a}, {a}_n).to_vec();"));
+                p.arg = format!("&mut {a}_v");
+                p.post.push(format!("put_vec({a}_v, {a}_o, {a}_on);"));
+            }
+            // &mut HashMap or HashSet: one made from Volt's entries, its entries handed back after the
+            // call (as a map result's: two lists)
+            Ty::Ref(m, true) if matches!(**m, Ty::Map(..) | Ty::Set(_)) => {
+                let mut q = self.param(g, &Ty::Ref(m.clone(), false), a)?;
+                let made = q.arg.strip_prefix('&')?.to_string();
+                q.pre.push(format!("let mut {a}_m = {made};"));
+                q.arg = format!("&mut {a}_m");
+                match &**m {
+                    Ty::Map(k, v) => {
+                        let ko = self.out(g, &Ty::Vec(k.clone()), &format!("{a}_rk"), true)?;
+                        let vo = self.out(g, &Ty::Vec(v.clone()), &format!("{a}_rv"), true)?;
+                        q.params.extend(ko.params);
+                        q.params.extend(vo.params);
+                        q.post.push(format!("{{ let (mk, mv): (Vec<_>, Vec<_>) = {a}_m.into_iter().unzip(); {} {} }}", ko.store.replace("$v", "mk"), vo.store.replace("$v", "mv")));
+                    }
+                    Ty::Set(x) => {
+                        let xo = self.out(g, &Ty::Vec(x.clone()), &format!("{a}_rk"), true)?;
+                        q.params.extend(xo.params);
+                        q.post.push(format!("{{ let mk: Vec<_> = {a}_m.into_iter().collect(); {} }}", xo.store.replace("$v", "mk")));
+                    }
+                    _ => return None,
+                }
+                return Some(q);
             }
             Ty::Slice(e, _) | Ty::Vec(e) if matches!(**e, Ty::Prim(_)) => {
                 let Ty::Prim(x) = **e else { return None };
@@ -2447,7 +2488,8 @@ impl Lang for Rust {
             }
             // lent text: where it is (a Plain receiver's text can only be 'static)
             Ty::StrRef => ShimOut { params: vec![format!("{o}: *mut *mut u8"), format!("{o}_n: *mut usize")], store: format!("{{ let w: &str = $v; *{o} = w.as_ptr() as *mut u8; *{o}_n = w.len(); }}") },
-            Ty::Str | Ty::String | Ty::Cow => ShimOut { params: vec![format!("{o}: *mut *mut u8"), format!("{o}_n: *mut usize")], store: format!("put_str($v.to_string(), {o}, {o}_n);") },
+            Ty::Cow(x) => return self.out(g, x, o, owned),
+            Ty::Str | Ty::String => ShimOut { params: vec![format!("{o}: *mut *mut u8"), format!("{o}_n: *mut usize")], store: format!("put_str($v.to_string(), {o}, {o}_n);") },
             Ty::Slice(e, _) | Ty::Vec(e) | Ty::Array(e, _) if matches!(**e, Ty::Named(_)) => {
                 let ti = g.info(e)?;
                 let (rp, mg) = (self.path(&ti.def), Gen::mangle(&ti.def));

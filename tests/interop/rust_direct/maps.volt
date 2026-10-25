@@ -42,6 +42,20 @@ fn main() -> void {
     val added = cl.add({ r: 5, c: 6 });
     std::println("keys {} {} {} {} {} {}", sc.len, h, geom::suit_total(&sc), cl.len(), added, geom::cell_sum(&cl));
     std::println("cow {} {}", geom::cow_upper("hi there"), geom::keep("as is"));
+    var pv: std::vec<i32> = {};
+    pv.push(7) catch @panic("out of memory");
+    geom::push_evens(&pv, 3);
+    var wm: std::map<std::string, i32> = {};
+    geom::add_word(&wm, "x");
+    geom::add_word(&wm, "x");
+    geom::add_word(&wm, "y");
+    val xc = wm.get(std::string::from("x")) ?? @panic("no x");
+    val xn = *xc;
+    var ss: std::set<geom::Suit> = {};
+    val first = geom::add_suit(&ss, geom::Suit::Hearts);
+    val again = geom::add_suit(&ss, geom::Suit::Hearts);
+    val dc = geom::doubled_cow(pv.items());
+    std::println("written {} {} {} {} {} {} {} {}", pv.len, pv[3], wm.len, xn, ss.len(), first, again, dc[3]);
 }
 // expect: maps 3 5 3
 // expect: scaled 3 4
@@ -51,3 +65,4 @@ fn main() -> void {
 // expect: places 2 1 2 1:Red,2:Green
 // expect: keys 2 3 35 3 true 102
 // expect: cow HI THERE as is
+// expect: written 4 4 2 2 1 true false 8

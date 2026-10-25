@@ -56,11 +56,13 @@ which an editor's hover shows; Zig's and Go's do too.
 | `impl T { pub fn m(&self) }` | `attach fn m(this: T&)`; without `self`, `T::f(...)` (so `T::new(...)`) |
 | `i8`…`u64`, `isize`, `usize`, `f32`, `f64`, `bool` | the same; `char` is `u32` |
 | `&str`, `String` | `str` in, `std::string` out (a copy) |
-| `Cow<str>` | `str` in (Rust gets it borrowed), `std::string` out (a copy) |
+| `Cow<str>`, `Cow<[T]>` of a number | `str`, `T[..]` in (Rust gets it borrowed); `std::string`, `std::vec<T>` out (a copy) |
 | `&[T]`, `&mut [T]`, `Vec<T>` | `T[..]` in, `std::vec<T>` out; `&[&str]`, `Vec<String>`: `str[..]`, `std::vec<std::string>` |
+| `&mut Vec<T>` of a number | `std::vec<T>&` (`geom::push_evens(&pv, 3)`): Rust gets a `Vec` of its items, and the `Vec`'s items replace them when the call ends (a panic leaves Volt's as it was) |
 | `Option<T>` | `T?` |
 | `HashMap<K, V>`, `BTreeMap<K, V>` (by value or `&`), `K` and `V` each a number, `String`, or the crate's plain struct or fieldless enum | `std::map<K, V>&` in (lent: Rust gets a map made from its entries), `std::map<K, V>` out (a copy); a struct or enum used as a key derives `eq` and `hash` in Volt (`sc.get(geom::Suit::Hearts)`) |
 | `HashSet<T>`, `BTreeSet<T>` (by value or `&`), `T` as a map's key | `std::set<T>&` in, `std::set<T>` out, copied the same way |
+| `&mut HashMap<K, V>`, `&mut BTreeMap`, `&mut HashSet`, `&mut BTreeSet` | `std::map<K, V>&`, `std::set<T>&`: Rust gets one made from its entries, whose entries replace them when the call ends (a panic leaves Volt's as it was) |
 | `Box<T>` of a type that isn't a trait (a struct, a number, `String`, a `Vec`) | `T` itself: the shim boxes it going in and unboxes it coming out (`geom::unbox(geom::boxed_point(1.5))`) |
 | `*const T`, `*mut T` of a number | `T*`: the same address (`val p: i32* = &n; geom::bump_ptr(p);`) |
 | `Result<T, E>` with `E` one of the crate's enums (directly or through an alias like `type Result<T> = ...`) | `E!T`: a Volt error set of `E`'s variants, each with its fields (numbers, `char` as `u32`, text as `std::string`; a variant holding anything else carries the error's text), matched like an enum; named `E_error` when `E` is a value elsewhere too |

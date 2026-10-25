@@ -1137,3 +1137,22 @@ pub fn cow_upper(s: std::borrow::Cow<str>) -> std::borrow::Cow<'static, str> {
 pub fn keep(s: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Borrowed(s)
 }
+
+// &mut Vec, maps and sets: Volt's, the call's changes written back; Cow<[T]>
+pub fn push_evens(v: &mut Vec<i32>, n: i32) {
+    for i in 0..n {
+        v.push(i * 2);
+    }
+}
+
+pub fn add_word(m: &mut std::collections::HashMap<String, i32>, w: &str) {
+    *m.entry(w.to_string()).or_insert(0) += 1;
+}
+
+pub fn add_suit(s: &mut std::collections::BTreeSet<Suit>, x: Suit) -> bool {
+    s.insert(x)
+}
+
+pub fn doubled_cow(xs: std::borrow::Cow<[i32]>) -> std::borrow::Cow<'static, [i32]> {
+    std::borrow::Cow::Owned(xs.iter().map(|x| x * 2).collect())
+}
