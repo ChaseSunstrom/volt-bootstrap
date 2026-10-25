@@ -9861,9 +9861,10 @@ attach fn cpp_spell(this: checker&, t: u32) -> std::string? {
 
 // a Volt type C++ has no type for (a Volt struct, a tuple, an optional that isn't a pointer, an enum
 // with payloads, f16, f128) as a C++ struct of its size and alignment, volt_m_<type id>, declared once
-// for the C++ units and the probes: C++ copies it (a template's T), but can't read it. Volt hands
-// one over by its address. None for a type with a delete (C++ would copy what it owns) or no layout
-// ponytail: opaque bytes; a field-by-field mirror when C++ needs to read a Volt struct's fields
+// for the C++ units and the probes: a struct or tuple whose fields all have C++ types lists them by
+// name (cpp_mirror_fields: a template reads p.x, t._0), anything else is its bytes, which C++ copies
+// (a template's T) but can't read. Both are C's layout. Volt hands one over by its address. None for
+// a type with a delete (C++ would copy what it owns) or no layout
 attach fn cpp_mirror(this: checker&, t: u32) -> std::string? {
     match (*this.t.get(t)) {
         .STRUCT(s) => {
@@ -9906,7 +9907,24 @@ attach fn cpp_mirror(this: checker&, t: u32) -> std::string? {
         }
     }
     put(&this.cpp_decl_names, copy name);
+    // a struct or tuple: declared ahead (a field may point back at it), its fields' mirrors declared
+    // next, then it (cpp_decl_names and cpp_decls stay in step: the name once for each)
+    var agg = false;
+    match (*this.t.get(t)) {
+        .STRUCT(s) => { agg = true; },
+        .TUPLE(ts, names) => { agg = true; },
+        default => {},
+    }
+    var fields: std::string? = null;
+    if (agg) {
+        put(&this.cpp_decls, fmt("struct {};\n", copy name));
+        fields = this.cpp_mirror_fields(t);
+        put(&this.cpp_decl_names, copy name);
+    }
     var d = fmt4("// Volt's {}, as its bytes\nstruct __attribute__((aligned({}))) {} {{\n    unsigned char b[{}];\n}};\n", this.ty_name(t), unum(l.align), copy name, unum(l.size));
+    if (fields) {
+        d = fmt4("// Volt's {}, its fields\nstruct __attribute__((aligned({}))) {} {{\n{}}};\n", this.ty_name(t), unum(l.align), copy name, copy fields);
+    }
     // its size and alignment are layout()'s model (i64 and f64 8-aligned): checked against the type
     // laid out by the target's C compiler, as the backends lay it out (i386 aligns them to 4), so a
     // mismatch fails the C++ step instead of a by-value pass copying the wrong bytes
@@ -9920,6 +9938,70 @@ attach fn cpp_mirror(this: checker&, t: u32) -> std::string? {
     }
     put(&this.cpp_decls, move d);
     return name;
+}
+
+// a struct's or tuple's fields as C++ members, for cpp_mirror's readable mirror: each by its Volt name
+// (a tuple's _0, _1 unless it names them; a C++ keyword or macro gets a trailing _) and C++ type, in Volt's
+// order, which is C's layout as the bytes' was; none when a field has no C++ type
+attach fn cpp_mirror_fields(this: checker&, t: u32) -> std::string? {
+    var tys: std::vec<u32> = {};
+    var names: std::vec<std::string> = {};
+    match (*this.t.get(t)) {
+        .STRUCT(s) => {
+            val fs = this.struct_fields(s, {}) catch |e| {
+                return null;
+            };
+            for (f&) in fs.items() {
+                put(&tys, f.ty);
+                put(&names, S(f.name));
+            }
+        },
+        .TUPLE(ts, ns) => {
+            for (i) in 0..ts.len {
+                put(&tys, *ts.at(i));
+                val n = *ns.at(i);
+                if (n) {
+                    put(&names, S(n));
+                } else {
+                    put(&names, fmt("_{}", unum(@cast<u64>(i))));
+                }
+            }
+        },
+        default => { return null; },
+    }
+    var out = S("");
+    for (i) in 0..tys.len {
+        var nm = copy *names.at(i);
+        // (and the object-like macros C++'s headers or GNU modes define in lower case)
+        if (cpp_keyword(nm.as_str()) || nm.as_str() == "errno" || nm.as_str() == "linux" || nm.as_str() == "unix" || nm.as_str() == "i386") {
+            nm.push('_');
+        }
+        val m = this.cpp_member_decl(*tys.at(i), move nm) ?? return null;
+        out.append("    ");
+        out.append(m.as_str());
+        out.append(";\n");
+    }
+    return out;
+}
+
+// a member of Volt type t named name as a C++ declaration (cpp_mirror_fields): an array's as C++'s, a
+// pointer to a type C++ has none for as void *, i128 none (C++ has no volt_i128)
+attach fn cpp_member_decl(this: checker&, t: u32, name: std::string) -> std::string? {
+    match (*this.t.get(t)) {
+        .ARRAY(e, n) => { return this.cpp_member_decl(e, fmt2("{}[{}]", move name, unum(n))); },
+        .PTR(x) => {
+            val p = this.cpp_spell(t) ?? S("void *");
+            return fmt2("{} {}", copy p, move name);
+        },
+        .INT(k) => {
+            if (k == int_ty::I128 || k == int_ty::U128) {
+                return null;
+            }
+        },
+        default => {},
+    }
+    val s = this.cpp_spell_m(t) ?? return null;
+    return fmt2("{} {}", copy s, move name);
 }
 
 // a member `name` of Volt type t as the target's C compiler lays it out (cgen's C struct; lgen's LLVM
@@ -11324,14 +11406,33 @@ attach fn cpp_unit(this: checker&, unit: u32, live: std::map<u32, bool>&) -> std
     }
     out.append(CPP_PRELUDE);
     out.append(CPP_FN_CAST);
+    // the declarations a kept wrapper names, and those a used one names (a mirror's fields' mirrors)
+    var used: std::vec<bool> = {};
     for (i) in 0..this.cpp_decls.len {
-        var used = false;
+        var u = false;
         for (j) in 0..this.cpp_shims.len {
             if (*keep.at(j) && contains(this.cpp_shims.at(j).as_str(), this.cpp_decl_names.at(i).as_str())) {
-                used = true;
+                u = true;
             }
         }
-        if (used) {
+        put(&used, u);
+    }
+    var more = true;
+    while (more) {
+        more = false;
+        for (i) in 0..this.cpp_decls.len {
+            if (!*used.at(i)) {
+                for (j) in 0..this.cpp_decls.len {
+                    if (*used.at(j) && !*used.at(i) && contains(this.cpp_decls.at(j).as_str(), this.cpp_decl_names.at(i).as_str())) {
+                        *used.at(i) = true;
+                        more = true;
+                    }
+                }
+            }
+        }
+    }
+    for (i) in 0..this.cpp_decls.len {
+        if (*used.at(i)) {
             out.push('\n');
             out.append(this.cpp_decls.at(i).as_str());
         }

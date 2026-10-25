@@ -229,7 +229,8 @@ T echo(T)`, `template <class... A>`, a declared generic's `T` too):
 
 | Volt | in C++ |
 |---|---|
-| a Volt struct, a tuple, `T?` (not a pointer's), an enum with payloads, `f16`, `f128` | a struct of its bytes, `volt_m_N` (its size and alignment): C++ copies it and gives it back (`echo(p)` is `p`; an explicit template argument, `size_of<point>()` or `same<point>(p, q)`, names the same struct as a parameter type; a call made per use whose result is one gives back the Volt value, a pointer to one a `T*`, even when only an explicit template argument names it, `zero<point>()`; a reference to one, `global<point>()`, comes back as a copy, as does any reference result of a call whose reference parameter took one passed by value, `h.pick(p)`, since it could be into C++'s copy), but can't read its fields or do arithmetic on it. One with a `delete` (a `std::vec`, a `std::string` inside) is an error: C++ would copy what it owns |
+| a Volt struct, a tuple | `volt_m_N`, a C++ struct of its fields by name in C's layout (a tuple's `_0`, `_1`, unless it names them; a field named like a C++ keyword, `errno`, `linux` or `unix` gets a trailing `_`): a template reads them (`r.w * r.h`, `s.b.x`, `t._0 + t._1`, `n.next->v`) and can change a copy it gives back. A field's type is C++'s for numbers, `bool`, pointers (`void *` for a type C++ has none for) and enums (their tags), an array's is a C++ array, a struct's or tuple's is its own mirror and another type's its bytes; a struct with an `i128` field, or one C++ has no type for, is its bytes, as below |
+| `T?` (not a pointer's), an enum with payloads, `f16`, `f128` | a struct of its bytes, `volt_m_N` (its size and alignment): C++ copies it and gives it back (`echo(p)` is `p`; an explicit template argument, `size_of<point>()` or `same<point>(p, q)`, names the same struct as a parameter type; a call made per use whose result is one gives back the Volt value, a pointer to one a `T*`, even when only an explicit template argument names it, `zero<point>()`; a reference to one, `global<point>()`, comes back as a copy, as does any reference result of a call whose reference parameter took one passed by value, `h.pick(p)`, since it could be into C++'s copy), but can't read it or do arithmetic on it. One with a `delete` (a `std::vec`, a `std::string` inside), struct or not, is an error: C++ would copy what it owns |
 | a closure, a `fn(A...) -> R` value | `std::function<R(A...)>` calling it (good while the call is: C++ mustn't keep it), `A` and `R` numbers, `bool`, pointers or enums; `@cpp` text lends it, and a template's per-use fn takes it as any Volt fn does (a closure owning what it captured moves there: pass `&c` to keep it) |
 | a pointer to one of those | `volt_m_N *` (a slice of them has no form per use yet) |
 
@@ -519,10 +520,10 @@ object `derive` didn't make; without RTTI, either stops the program saying so.
   `@cpp<i32>("ns::apply({&0}, {1})", inc, 4)`. The stub declared for such a function says why in
   its comment: `// C++: int ns::flags(const std::vector<std::vector<Mode>> & v) (worked out per use:
   const std::vector<std::vector<Mode>> & has no Volt form)`.
-- A Volt struct, tuple, `T?`, enum with payloads, `f16` or `f128` handed to C++ per use is its
-  bytes: a template can copy it, not read it (`x.f` or `x * 2` on one is clang's error), and a
-  `std::optional`, `std::tuple` or `std::variant` parameter worked out per use doesn't take one
-  (a declared one does).
+- A Volt `T?`, enum with payloads, `f16` or `f128` handed to C++ per use is its bytes: a template
+  can copy it, not read it (`x * 2` on one is clang's error); a struct or tuple can be read by
+  field, not used as a `std::tuple` (`std::get<0>(t)`). A `std::optional`, `std::tuple` or
+  `std::variant` parameter worked out per use doesn't take one (a declared one does).
 - A `std::string&` parameter is a copy C++ changes and Volt copies back once the call returns.
   The same Volt string given to two of them in one call is one C++ copy, so C++ sees one string,
   as it would (`both(&s, &s)` with `a += "x"; b += "y";` leaves `s` ending in `xy`).

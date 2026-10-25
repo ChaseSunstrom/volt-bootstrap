@@ -2697,7 +2697,7 @@ fn cpp_peruse3() {
     // made per use (same<cell>(a, b), size_of<shape>() with nothing to deduce T from): its mirror, as
     // for a deduced one
     let e = Env::new("cpp-peruse3");
-    let want = "struct true false\ntuple true false\nsize true true true\n";
+    let want = "struct true false\ntuple true false\nsize true true true\nfields 12 6 10 4 8\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_peruse3.volt", "--backend", backend]), "voltc run cpp_peruse3.volt"), want, "explicit template arguments of Volt types ({backend})");
     }
