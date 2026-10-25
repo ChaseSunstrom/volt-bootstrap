@@ -1361,6 +1361,7 @@ impl<'a> Doc<'a> {
             ("HashMap" | "BTreeMap", 2) => Some(Ty::Map(one()?, Box::new(self.ty(args[1])?))),
             ("HashSet" | "BTreeSet", 1) => Some(Ty::Set(one()?)),
             ("Box", 1) => Some(Ty::Boxed(one()?)),
+            ("Cow", 1) if args[0].get("primitive").and_then(Json::str) == Some("str") => Some(Ty::Cow),
             (_, 0) if !shadowed && last.starts_with(|c: char| c.is_ascii_uppercase()) => Some(Ty::Named(last)),
             _ => None,
         }
@@ -2223,6 +2224,10 @@ impl Lang for Rust {
                 p.params.extend([format!("{a}: *const u8"), format!("{a}_n: usize")]);
                 p.arg = if *t == Ty::String { format!("s({a}, {a}_n).to_string()") } else { format!("s({a}, {a}_n)") };
             }
+            Ty::Cow => {
+                p.params.extend([format!("{a}: *const u8"), format!("{a}_n: usize")]);
+                p.arg = format!("::std::borrow::Cow::Borrowed(s({a}, {a}_n))");
+            }
             Ty::Slice(e, _) | Ty::Vec(e) if matches!(**e, Ty::Prim(_)) => {
                 let Ty::Prim(x) = **e else { return None };
                 if matches!(t, Ty::Slice(_, true)) {
@@ -2442,7 +2447,7 @@ impl Lang for Rust {
             }
             // lent text: where it is (a Plain receiver's text can only be 'static)
             Ty::StrRef => ShimOut { params: vec![format!("{o}: *mut *mut u8"), format!("{o}_n: *mut usize")], store: format!("{{ let w: &str = $v; *{o} = w.as_ptr() as *mut u8; *{o}_n = w.len(); }}") },
-            Ty::Str | Ty::String => ShimOut { params: vec![format!("{o}: *mut *mut u8"), format!("{o}_n: *mut usize")], store: format!("put_str($v.to_string(), {o}, {o}_n);") },
+            Ty::Str | Ty::String | Ty::Cow => ShimOut { params: vec![format!("{o}: *mut *mut u8"), format!("{o}_n: *mut usize")], store: format!("put_str($v.to_string(), {o}, {o}_n);") },
             Ty::Slice(e, _) | Ty::Vec(e) | Ty::Array(e, _) if matches!(**e, Ty::Named(_)) => {
                 let ti = g.info(e)?;
                 let (rp, mg) = (self.path(&ti.def), Gen::mangle(&ti.def));

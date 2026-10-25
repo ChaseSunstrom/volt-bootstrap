@@ -84,6 +84,8 @@ pub enum Ty {
     Boxed(Box<Ty>),
     /// a raw pointer to a number (Rust's *const T, *mut T): a Volt T*, the same address
     Ptr(Box<Ty>, bool),
+    /// Rust's Cow<str>: text (borrowed going in, copied coming out)
+    Cow,
 }
 
 /// an enum's variant, with its fields' names (a tuple variant's are 0, 1..) and types
@@ -410,6 +412,9 @@ pub struct Gen<'a> {
     pub vec_elems: BTreeSet<&'static str>,
     /// named types whose slices or vecs come back (a take helper each)
     pub elem_types: BTreeSet<String>,
+    /// plain structs and enums some map's keys or set's elements are: their mirrors derive eq and
+    /// hash (Volt's map and set need them)
+    keyed: BTreeSet<String>,
     pub strs: bool,
     errors: bool,
     shim: String,
@@ -517,7 +522,7 @@ impl<'a> Gen<'a> {
                 err_sets.insert(e.clone(), e.clone());
             }
         }
-        Gen { colls: false, m, alias: alias.to_string(), lang, types, vec_elems: BTreeSet::new(), elem_types: BTreeSet::new(), strs: false, errors: false, shim: String::new(), ext: String::new(), helpers: String::new(), modules: BTreeMap::new(), left_out: Vec::new(), syms: BTreeSet::new(), sigs: BTreeSet::new(), tramps: Vec::new(), fn_handles: Vec::new(), fn_tys: Vec::new(), traits, made_traits: BTreeSet::new(), made_foreign: BTreeSet::new(), block: None, put_string: false, pushes: BTreeMap::new(), err_sets }
+        Gen { colls: false, m, alias: alias.to_string(), lang, types, vec_elems: BTreeSet::new(), elem_types: BTreeSet::new(), keyed: BTreeSet::new(), strs: false, errors: false, shim: String::new(), ext: String::new(), helpers: String::new(), modules: BTreeMap::new(), left_out: Vec::new(), syms: BTreeSet::new(), sigs: BTreeSet::new(), tramps: Vec::new(), fn_handles: Vec::new(), fn_tys: Vec::new(), traits, made_traits: BTreeSet::new(), made_foreign: BTreeSet::new(), block: None, put_string: false, pushes: BTreeMap::new(), err_sets }
     }
 
     /// the Volt declaration of shim function sym (params: "name: type"): an extern "C" fn, or for
@@ -631,6 +636,7 @@ impl<'a> Gen<'a> {
         match t {
             // the boxed value itself (the other side boxes it)
             Ty::Boxed(x) => return self.volt_param_at(name, x, &a, i),
+            Ty::Cow => return self.volt_param_at(name, &Ty::Str, &a, i),
             // a pointer to a number: Volt's, the same address
             Ty::Ptr(x, _) if matches!(**x, Ty::Prim(_)) => {
                 let Ty::Prim(x) = **x else { return None };
@@ -879,13 +885,13 @@ impl<'a> Gen<'a> {
     /// a returned value's Volt side (its out parameters are named o...)
     /// a map's key or value, or a set's element, as Volt holds it: its Volt type, what's pushed for
     /// it ($e: a reference to it, or a pointer for a set's), the pushed type, and the extern pointer
-    /// to an array of those: numbers as they are, text as strs, and (a map's value, not hashed) the
-    /// import's plain structs as copies and enums as their tags
+    /// to an array of those: numbers as they are, text as strs, and the import's plain structs as
+    /// copies and enums as their tags (as keys, their mirrors derive eq and hash: keyed)
     fn coll_elem(&self, t: &Ty, hashed: bool) -> Option<(String, String, String, String)> {
         Some(match t {
             Ty::Prim(x) => (x.to_string(), "*$e".into(), x.to_string(), format!("{x}*")),
             Ty::String => ("std::string".into(), "$e.as_str()".into(), "str".into(), "void*".into()),
-            Ty::Named(_) if !hashed => {
+            Ty::Named(n) if !hashed || self.keyed.contains(n) => {
                 let ti = self.info(t)?;
                 let vp = self.volt_path(&ti.def);
                 match ti.kind {
@@ -896,6 +902,33 @@ impl<'a> Gen<'a> {
             }
             _ => return None,
         })
+    }
+
+    /// the import's plain structs and enums some map's keys or set's elements are (in t), and
+    /// those their fields name: keyed
+    fn find_keys(&mut self, t: &Ty) {
+        match t {
+            Ty::Map(k, v) => {
+                self.key(k);
+                self.find_keys(v);
+            }
+            Ty::Set(x) => self.key(x),
+            Ty::Opt(x) | Ty::Res(x) | Ty::Vec(x) | Ty::Slice(x, _) | Ty::Ref(x, _) | Ty::Fails(x, _) | Ty::Boxed(x) | Ty::Future(x) => self.find_keys(x),
+            Ty::Tuple(es) => es.iter().for_each(|(_, x)| self.find_keys(x)),
+            _ => {}
+        }
+    }
+
+    fn key(&mut self, t: &Ty) {
+        let Ty::Named(n) = t else { return };
+        let Some(ti) = self.types.get(n) else { return };
+        if ti.kind == Kind::Handle || !self.keyed.insert(n.clone()) {
+            return;
+        }
+        let fields: Vec<Ty> = ti.def.fields.iter().flatten().filter_map(|f| f.2.clone()).collect();
+        for f in &fields {
+            self.key(f);
+        }
     }
 
     /// map_of and set_of (once): a Volt map from its keys and values, a set from its elements
@@ -912,6 +945,7 @@ impl<'a> Gen<'a> {
         Some(match t {
             // the boxed value itself (the other side unboxes it)
             Ty::Boxed(x) => return self.volt_out(x, o),
+            Ty::Cow => return self.volt_out(&Ty::Str, o),
             Ty::Ptr(x, _) if matches!(**x, Ty::Prim(_)) => {
                 let Ty::Prim(x) = **x else { return None };
                 VoltOut { ext: vec![format!("{o}: {x}**")], locals: vec![format!("var {o}: {x}* = null;")], args: vec![format!("&{o}")], value: o.to_string(), ty: format!("{x}*") }
@@ -1421,6 +1455,9 @@ impl<'a> Gen<'a> {
                         _ => {}
                     }
                 }
+                if self.keyed.contains(name) {
+                    v.push_str("@attributes([@derive(eq, hash)])\n");
+                }
                 let _ = write!(v, "struct {} {{\n{fields}}}\n", def.name);
             }
             Kind::Handle => {
@@ -1446,6 +1483,9 @@ impl<'a> Gen<'a> {
                 let mut body = String::new();
                 for (n, x) in &vs {
                     let _ = writeln!(body, "    {} = {x},", volt_name(n));
+                }
+                if self.keyed.contains(name) {
+                    v.push_str("@attributes([@derive(eq, hash)])\n");
                 }
                 let _ = write!(v, "enum {}: i64 {{\n{body}}}\n", def.name);
                 let mut tag = format!("    fn tag_{mg}(x: {vp}) -> i64 {{\n        match (x) {{\n");
@@ -2266,6 +2306,11 @@ impl<'a> Gen<'a> {
 
     /// the shim's source and the Volt source
     pub fn write(mut self, what: &str) -> (String, String) {
+        let sigs = self.m.fns.iter().map(|(_, s)| s).chain(self.m.methods.values().flatten());
+        let tys: Vec<Ty> = sigs.flat_map(|s| s.params.iter().filter_map(|p| p.1.clone()).chain(s.ret.clone())).collect();
+        for t in &tys {
+            self.find_keys(t);
+        }
         let names: Vec<String> = self.types.keys().cloned().collect();
         for n in &names {
             let module = self.types[n].def.module.clone();

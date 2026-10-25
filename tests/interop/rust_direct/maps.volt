@@ -34,6 +34,14 @@ fn main() -> void {
     cs.put(2, geom::Color::Green);
     cs.put(1, geom::Color::Red);
     std::println("places {} {} {} {}", pl.len, home.x, home.y, geom::paint(&cs));
+    var sc = geom::suit_counts();
+    val hearts = sc.get(geom::Suit::Hearts) ?? @panic("no hearts");
+    val h = *hearts;
+    sc.put(geom::Suit::Spades, 5);
+    var cl = geom::cells();
+    val added = cl.add({ r: 5, c: 6 });
+    std::println("keys {} {} {} {} {} {}", sc.len, h, geom::suit_total(&sc), cl.len(), added, geom::cell_sum(&cl));
+    std::println("cow {} {}", geom::cow_upper("hi there"), geom::keep("as is"));
 }
 // expect: maps 3 5 3
 // expect: scaled 3 4
@@ -41,3 +49,5 @@ fn main() -> void {
 // expect: box 1.5 3 4.5
 // expect: ptr 42 42
 // expect: places 2 1 2 1:Red,2:Green
+// expect: keys 2 3 35 3 true 102
+// expect: cow HI THERE as is

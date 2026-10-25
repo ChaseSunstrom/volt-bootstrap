@@ -1096,3 +1096,44 @@ pub fn places() -> std::collections::HashMap<String, Point> {
 pub fn paint(m: &std::collections::BTreeMap<i32, Color>) -> String {
     m.iter().map(|(k, c)| format!("{k}:{c:?}")).collect::<Vec<_>>().join(",")
 }
+
+// map keys and set elements of the crate's enum and struct
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Suit {
+    Hearts,
+    Spades,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Cell {
+    pub r: i32,
+    pub c: i32,
+}
+
+pub fn suit_counts() -> std::collections::HashMap<Suit, i32> {
+    let mut m = std::collections::HashMap::new();
+    m.insert(Suit::Hearts, 3);
+    m.insert(Suit::Spades, 4);
+    m
+}
+
+pub fn suit_total(m: &std::collections::HashMap<Suit, i32>) -> i32 {
+    m.get(&Suit::Hearts).copied().unwrap_or(0) * 10 + m.get(&Suit::Spades).copied().unwrap_or(0)
+}
+
+pub fn cells() -> std::collections::BTreeSet<Cell> {
+    [Cell { r: 1, c: 2 }, Cell { r: 3, c: 4 }].into_iter().collect()
+}
+
+pub fn cell_sum(s: &std::collections::HashSet<Cell>) -> i32 {
+    s.iter().map(|x| x.r * 10 + x.c).sum()
+}
+
+// Cow<str>: text each way
+pub fn cow_upper(s: std::borrow::Cow<str>) -> std::borrow::Cow<'static, str> {
+    std::borrow::Cow::Owned(s.to_uppercase())
+}
+
+pub fn keep(s: &str) -> std::borrow::Cow<'_, str> {
+    std::borrow::Cow::Borrowed(s)
+}
