@@ -4586,6 +4586,7 @@ fn builtin_defs() -> std::vec<attr_def> {
     put(&v, { name: "typeof", args: 1, sig: "@typeof(expr) -> type", doc: "an expression's type (comptime)" });
     put(&v, { name: "typeinfo", args: 1, sig: "@typeinfo(T) -> typeinfo", doc: "a type's description (comptime): name, size, kind, fields, variants" });
     put(&v, { name: "typeid", args: 1, sig: "@typeid(T) -> u64", doc: "a type's id, the same in every build; for a trait value, the id of the type it holds" });
+    put(&v, { name: "done", args: 1, sig: "@done(frame)", doc: "whether an async frame has finished: an await of it then takes its value without stepping it" });
     put(&v, { name: "expand", args: 1, sig: "@expand(expr)", doc: "expr, noting at compile time what it became: a comptime value, or the generic instance a call runs" });
     put(&v, { name: "embed", args: 1, sig: "@embed(\"path\") -> str", doc: "a file's bytes, read at compile time (the path is relative to the source file)" });
     put(&v, { name: "location", args: 0, sig: "@location() -> str", doc: "where it's written, as FILE:LINE:COL; as a parameter's default, where the call is (std::testing's assertions use it)" });

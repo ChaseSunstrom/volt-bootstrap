@@ -107,6 +107,30 @@ void volt_rt_wait(int32_t *word, int32_t expected) { (void)word; (void)expected;
 void volt_rt_wake(int32_t *word, bool all) { (void)word; (void)all; }
 #endif
 #endif
+/* await's wait: a Rust future's pending poll names its wake cell (volt_rt_await_on) just before its
+   frame suspends; await takes it after the step and sleeps until the future's waker sets the cell
+   (volt_rt_woken), which also bumps the word an executor sleeps on while all its frames wait */
+static _Thread_local int32_t *volt_await_cell;
+static int32_t volt_exec_word;
+void volt_rt_await_on(int32_t *cell) { volt_await_cell = cell; }
+int32_t *volt_rt_await_take(void) {
+    int32_t *c = volt_await_cell;
+    volt_await_cell = 0;
+    return c;
+}
+void volt_rt_await_idle(void) {
+    int32_t *c = volt_rt_await_take();
+    if (c) while (__atomic_load_n(c, __ATOMIC_ACQUIRE) == 0) volt_rt_wait(c, 0);
+}
+void volt_rt_woken(int32_t *cell) {
+    __atomic_store_n(cell, 1, __ATOMIC_RELEASE);
+    volt_rt_wake(cell, true);
+    __atomic_add_fetch(&volt_exec_word, 1, __ATOMIC_RELEASE);
+    volt_rt_wake(&volt_exec_word, true);
+}
+bool volt_rt_await_ready(int32_t *cell) { return __atomic_load_n(cell, __ATOMIC_ACQUIRE) != 0; }
+int32_t volt_rt_exec_seq(void) { return __atomic_load_n(&volt_exec_word, __ATOMIC_ACQUIRE); }
+void volt_rt_exec_sleep(int32_t seq) { volt_rt_wait(&volt_exec_word, seq); }
 /* a lock on a word: 0 free, 1 held, 2 held and someone may be sleeping on it */
 static void volt_lock_word(int32_t *w) {
     int32_t free = 0;

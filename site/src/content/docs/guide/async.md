@@ -17,6 +17,7 @@ drive frames yourself, and an event loop can be a library on top.
 | `resume f` | run `f` until its next `suspend` |
 | `await f` | run `f` to the end and give its result |
 | `await g(args)` | call and wait in one step |
+| `@done(f)` | whether `f` has finished (an `await` of it then takes its result at once) |
 
 A plain call of an async fn (without `async`) just runs it to the end. Resuming a frame that has
 finished, or awaiting one twice, stops the program (`panic: resumed a frame that already
@@ -70,6 +71,44 @@ fn main() -> void {
 }
 // expect: 3 4 5
 ```
+
+## Running frames together
+
+`std::exec::run_all(&frames)` resumes each unfinished frame of a `std::vec` in turn until all have
+finished. It is plain Volt over the runtime's await word, so a program that drives its frames by
+hand doesn't pay for it:
+
+```volt
+use std::io;
+use std::exec;
+
+async fn count(name: str, n: i32) -> void {
+    for (i) in 0..n {
+        std::println("{} {}", name, i);
+        suspend;
+    }
+}
+
+fn main() -> void {
+    val a = async count("a", 2);       // prints a 0
+    var frames: std::vec<@typeof(a)> = {};
+    frames.push(a);
+    val b = async count("b", 1);       // prints b 0
+    frames.push(b);
+    std::exec::run_all(&frames);       // a 1, then both finish
+    std::println("{} {}", @done(frames[0]), @done(frames[1]));
+}
+// expect: a 0
+// expect: b 0
+// expect: a 1
+// expect: true true
+```
+
+A frame waiting on a [Rust future](/volt-bootstrap/interop/rust-and-zig/#volt-calls-rust) is
+passed over until the future's waker fires, and while every unfinished frame waits, `run_all`
+sleeps until one is woken: no polling, no timer. `await` of such a frame sleeps the same way, and
+`resume` of it returns at once while it isn't done. On bare metal nothing runs a waker, so nothing
+sleeps.
 
 ## Cleanup
 

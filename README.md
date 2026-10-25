@@ -81,7 +81,8 @@ fn main() -> !void {
   as tagged unions instead of vtables.
 - **Comptime**: functions, `if`, `match` and `for` that run in the compiler, types as values,
   `@typeinfo`.
-- **Async** as stackless frames of known size, driven by hand.
+- **Async** as stackless frames of known size, driven by hand or together by `std::exec::run_all`;
+  awaiting a Rust future sleeps until its waker fires.
 - **Two backends**: readable C, or native code through LLVM (the default on x86-64 and aarch64,
   except on Windows), with DWARF debug info for gdb in debug builds.
 - **Embeddable, like Lua**: `libvoltvm` compiles Volt source in memory and runs it through LLVM's

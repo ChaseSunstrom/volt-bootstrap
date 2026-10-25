@@ -19,6 +19,7 @@ Builtins start with `@`. They're part of the language, not a library.
 | `@typeid(T)`, `@typeid(x)` | `u64` | a type's id, the same in every build; for a trait value, the id of the type it holds. See [Comptime](/volt-bootstrap/guide/comptime/#type-ids-typeid) |
 | `@expand(expr)` | `expr`'s | `expr`, noting at compile time what it became: a comptime value, or the generic instance a call runs. See [Comptime](/volt-bootstrap/guide/comptime/#what-comptime-code-became-expand-and-voltc-expand) |
 | `@embed("path")` | `str` | a file's bytes, read at compile time; the path is relative to the source file. See [Reading files](/volt-bootstrap/guide/comptime/#reading-files-embed) |
+| `@done(frame)` | `bool` | whether an async frame has finished: an `await` of it then takes its result without stepping it. See [Async](/volt-bootstrap/guide/async/) |
 | `@location()` | `str` | where it's written, as `FILE:LINE:COL` (a panic's place). As a parameter's default it's where the call is: `fn check(ok: bool, at: str = @location())` knows which line called it, as `std::testing`'s assertions do |
 | `@vector(T, n)` | `type` | the SIMD vector of `n` numbers of type `T` (comptime): 2, 4, 8, 16, 32 or 64 lanes, 64 bytes at most; `std::simd` names them. See [SIMD vectors](/volt-bootstrap/std/math-functions/#simd-vectors) |
 | `@discriminant(v)` | `i64` | which variant an enum value (or a reference to one) holds: its discriminant, as `@typeinfo` lists it |

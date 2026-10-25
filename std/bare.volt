@@ -298,6 +298,24 @@ namespace bare {
         return q;
     }
 
+    // await's wait (runtime.h): on bare metal nothing but a frame itself wakes it (no thread runs a
+    // waker), so await never sleeps and an executor's sleep returns at once
+    export fn volt_rt_await_take() -> i32* {
+        return null;
+    }
+
+    export fn volt_rt_await_idle() -> void {}
+
+    export fn volt_rt_await_ready(cell: i32*) -> bool {
+        return true;
+    }
+
+    export fn volt_rt_exec_seq() -> i32 {
+        return 0;
+    }
+
+    export fn volt_rt_exec_sleep(seq: i32) -> void {}
+
     // float % (LLVM's frem), which LLVM makes a call to the C library's fmod or fmodf
     export fn fmod(x: f64, y: f64) -> f64 {
         return std::math::portable::fmod(x, y);

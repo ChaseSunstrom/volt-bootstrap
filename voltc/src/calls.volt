@@ -744,6 +744,17 @@ attach fn builtin(this: checker&, name: str, gargs: std::vec<garg>&, args_opt: s
         val loc = this.ir.node(ir_kind::CSTR(this.loc(span)), CSTR);
         return vnew(NEVER, this.ir.rt_call("volt_panic_str", nodes2(v.c, loc), NEVER));
     }
+    if (name == "done") {
+        // @done(fr): whether the frame has finished (an await then takes its value at once)
+        if (args.len != 1) {
+            return fails(span, "@done takes 1 argument: @done(frame)");
+        }
+        val e = try this.garg_value(args.at(0));
+        val f = try this.frame_ptr_of(e, "@done");
+        val ft = this.t.intern(tyk::FRAME(f.idx));
+        val state = this.ir.field(this.ir.deref(f.p, ft), 0, U32);
+        return vnew(BOOL, this.ir.binary(binop_ir::GE, state, this.ir.int(VOLT_DONE, U32), BOOL));
+    }
     if (name == "location") {
         // where it's written as FILE:LINE:COL, a panic's place; in a parameter's default, the call's
         if (args.len != 0) {

@@ -1156,6 +1156,12 @@ fn rust_direct() {
         c.args(["run", "--backend", backend, "maps.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
         tools(&mut c);
         assert_eq!(ok(c.output().unwrap(), "voltc run maps.volt"), expect("maps.volt"), "maps ({backend})");
+        // a Rust future's waker wakes the Volt frame waiting on it (no polling), resume returns at
+        // once, std::exec::run_all drives several frames
+        let mut c = Command::new(&e.voltc);
+        c.args(["run", "--backend", backend, "wakers.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+        tools(&mut c);
+        assert_eq!(ok(c.output().unwrap(), "voltc run wakers.volt"), expect("wakers.volt"), "wakers ({backend})");
         // Volt closures and a Volt type's trait methods taking and giving structs, enums,
         // handles, Vec, slices, arrays, Option and tuples
         let mut c = Command::new(&e.voltc);

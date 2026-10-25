@@ -1179,3 +1179,46 @@ pub fn arc_nums() -> std::sync::Arc<Vec<i32>> {
 pub fn vec_total(v: &Vec<i32>) -> i32 {
     v.iter().sum()
 }
+
+// a future another thread wakes after ms milliseconds, giving how many times it was polled: an await
+// that sleeps until its waker polls it twice
+struct Late {
+    polls: u32,
+    ms: u64,
+    state: Option<std::sync::Arc<std::sync::Mutex<(bool, Option<std::task::Waker>)>>>,
+}
+
+impl std::future::Future for Late {
+    type Output = u32;
+    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<u32> {
+        self.polls += 1;
+        if self.state.is_none() {
+            let s = std::sync::Arc::new(std::sync::Mutex::new((false, Some(cx.waker().clone()))));
+            let s2 = s.clone();
+            let ms = self.ms;
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(ms));
+                let mut g = s2.lock().unwrap();
+                g.0 = true;
+                if let Some(w) = g.1.take() {
+                    w.wake();
+                }
+            });
+            self.state = Some(s);
+            return std::task::Poll::Pending;
+        }
+        let polls = self.polls;
+        let s = self.state.clone().unwrap();
+        let mut g = s.lock().unwrap();
+        if g.0 {
+            std::task::Poll::Ready(polls)
+        } else {
+            g.1 = Some(cx.waker().clone());
+            std::task::Poll::Pending
+        }
+    }
+}
+
+pub fn woken_after(ms: u64) -> impl std::future::Future<Output = u32> {
+    Late { polls: 0, ms, state: None }
+}

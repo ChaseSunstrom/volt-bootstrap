@@ -455,7 +455,13 @@ attach fn gen_async(this: checker&, idx: u32, code: u32, param_cs: std::vec<u32>
     var aw = nodes(this.ir.if_(taken, this.ir.panic("awaited a frame that was already awaited", loc), null));
     val end = this.ir.label();
     val done = this.ir.binary(binop_ir::GE, ast, this.ir.int(VOLT_DONE, U32), BOOL);
-    val lp = this.ir.block(nodes2(this.ir.if_(done, this.ir.goto_(end), null), this.call_fn(a.step, nodes(ap), BOOL)));
+    // each step: a stale wait word cleared, the step, then (when a Rust future's pending poll named its
+    // wake cell) a sleep until its waker sets the cell; a Volt frame that suspended itself steps again
+    var lsteps = nodes(this.ir.if_(done, this.ir.goto_(end), null));
+    put(&lsteps, this.ir.rt_call("volt_rt_await_take", {}, VOIDPTR));
+    put(&lsteps, this.call_fn(a.step, nodes(ap), BOOL));
+    put(&lsteps, this.ir.if_(this.ir.unary(unop_ir::NOT, done, BOOL), this.ir.rt_call("volt_rt_await_idle", {}, VOID), null));
+    val lp = this.ir.block(move lsteps);
     put(&aw, this.ir.node(ir_kind::LOOP(lp), VOID));
     put(&aw, this.ir.label_at(end));
     put(&aw, this.ir.assign(ast, this.ir.int(VOLT_TAKEN, U32)));

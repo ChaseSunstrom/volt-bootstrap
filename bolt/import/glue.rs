@@ -1381,16 +1381,19 @@ impl<'a> Gen<'a> {
                 let mut start_args = vargs_in.clone();
                 start_args.push("&h".to_string());
                 let mut start = vec!["var h: void* = null;".to_string(), format!("{ns}::{sym}({});", start_args.join(", ")), format!("defer {ns}::{}(h);", self.sym(&["future_drop"]))];
+                // the outs' addresses taken at each poll: the frame may have moved since the last
+                // (into a std::vec for std::exec::run_all)
+                let mut outs_at = String::new();
                 if !out_args.is_empty() {
                     let casts: Vec<String> = out_args.iter().map(|a| format!("@cast<void*>({a})")).collect();
-                    start.push(format!("val outs: void*[{}] = {{ {} }};", out_args.len(), casts.join(", ")));
+                    outs_at = format!("val outs: void*[{}] = {{ {} }};\n        ", out_args.len(), casts.join(", "));
                 }
                 start.push("var st: u8 = 3;".into());
                 let poll = format!("{ns}::{}(h, {outs}, &e, &e_n)", self.sym(&["poll"]));
                 lines.extend(start.clone());
-                lines.push(format!("while (st == 3) {{\n        st = {poll};\n        if (st == 3) {{\n            suspend;\n        }}\n    }}"));
+                lines.push(format!("while (st == 3) {{\n        {outs_at}st = {poll};\n        if (st == 3) {{\n            suspend;\n        }}\n    }}"));
                 try_lines.extend(start);
-                try_lines.push(format!("while (st == 3) {{\n        val quiet = {ns}::{quiet}(true);\n        st = {poll};\n        {ns}::{quiet}(quiet);\n        if (st == 3) {{\n            suspend;\n        }}\n    }}"));
+                try_lines.push(format!("while (st == 3) {{\n        {outs_at}val quiet = {ns}::{quiet}(true);\n        st = {poll};\n        {ns}::{quiet}(quiet);\n        if (st == 3) {{\n            suspend;\n        }}\n    }}"));
             } else {
                 lines.push(format!("val st = {ext_call};"));
                 try_lines.push(format!("val quiet = {ns}::{quiet}(true);"));

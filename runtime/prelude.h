@@ -629,6 +629,14 @@ void volt_rt_thread_join(uint64_t handle);
 void volt_rt_thread_yield(void);
 void volt_rt_wait(int32_t *word, int32_t expected);
 void volt_rt_wake(int32_t *word, bool all);
+/* await's wait on a Rust future's wake cell, and an executor's sleep until any is woken: runtime.h */
+void volt_rt_await_on(int32_t *cell);
+int32_t *volt_rt_await_take(void);
+void volt_rt_await_idle(void);
+void volt_rt_woken(int32_t *cell);
+bool volt_rt_await_ready(int32_t *cell);
+int32_t volt_rt_exec_seq(void);
+void volt_rt_exec_sleep(int32_t seq);
 /* held around each print statement's output to the program's streams */
 void volt_lock_out(void);
 void volt_unlock_out(void);
