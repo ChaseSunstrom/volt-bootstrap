@@ -274,6 +274,9 @@ void *volt_rt_malloc(size_t n) { return volt_malloc(n); }
 void volt_rt_free(void *p) { volt_free(p); }
 void *volt_rt_realloc(void *p, size_t n) { return volt_realloc(p, n); }
 #endif
+/* a C++ unit's panic where it has no C library to print with (cppimport's VOLT_CPP_DIE): volt_panic
+   is the program's own */
+_Noreturn void volt_rt_panic(const char *msg, const char *loc) { volt_panic(msg, loc); }
 int volt_argc;
 char **volt_argv;
 int volt_rt_argc(void) { return volt_argc; }
