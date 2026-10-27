@@ -1759,7 +1759,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let m = w.model();
         assert_eq!(m.types.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["Flags", "U", "S_tag", "S", "Ctx"]);
-        assert_eq!(m.types[0].fields.as_ref().unwrap().iter().map(|f| f.2.clone()).collect::<Vec<_>>(), [Some(Ty::Prim("bool")), Some(Ty::Prim("u8")), Some(Ty::Prim("i8"))]);
+        // (a packed struct's u3 and i7 are Volt's own)
+        assert_eq!(m.types[0].fields.as_ref().unwrap().iter().map(|f| f.2.clone()).collect::<Vec<_>>(), [Some(Ty::Prim("bool")), Some(Ty::Prim("u3")), Some(Ty::Prim("i7"))]);
         assert_eq!(m.types[2].variants, Some(vec![("a".into(), 0), ("none".into(), 1)]));
         assert!(!m.types[4].clone && m.types[4].opaque);
         let names = |t: &str| m.methods[t].iter().map(|s| s.name.clone()).collect::<Vec<_>>();
