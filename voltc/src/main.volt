@@ -784,7 +784,7 @@ fn main() -> i32 {
         for (o&) in cpp_os.items() {
             put(&lc.cc_args, o.as_str());
         }
-        if (chk.cpp_shims.len > 0) {
+        if (chk.cpp_shims.len > 0 && links_cxx_lib()) {
             put(&lc.cc_args, "-lstdc++");
         }
         for (f&) in chk.link_flags.items() {
@@ -848,7 +848,7 @@ fn main() -> i32 {
         for (o&) in cpp_os.items() {
             put(&lc.cc_args, o.as_str());
         }
-        if (chk.cpp_shims.len > 0) {
+        if (chk.cpp_shims.len > 0 && links_cxx_lib()) {
             put(&lc.cc_args, "-lstdc++");
         }
         for (f&) in chk.link_flags.items() {
@@ -957,7 +957,7 @@ fn main() -> i32 {
         for (o&) in cpp_os.items() {
             put(&lc.cc_args, o.as_str());
         }
-        if (chk.cpp_shims.len > 0) {
+        if (chk.cpp_shims.len > 0 && links_cxx_lib()) {
             put(&lc.cc_args, "-lstdc++");
         }
         for (f&) in chk.link_flags.items() {
@@ -1162,6 +1162,19 @@ fn cc(src: str, out: str, c: cli&, object: bool) -> void {
 
 // the imports' own objects: a C++ unit per standard, and a C unit per standard Volt's C can't
 // include
+// whether the program links the C++ library for its C++ imports: not when $CXX says -nostdlib++ or
+// -nostdlib (no C++ library, or a bare-metal C++), where the wrapper units bring new and delete
+fn links_cxx_lib() -> bool {
+    var argv: std::vec<str> = {};
+    cxx_command(&argv);
+    for (a&) in argv.items() {
+        if (*a == "-nostdlib++" || *a == "-nostdlib") {
+            return false;
+        }
+    }
+    return true;
+}
+
 fn cpp_objects(chk: checker&, c: cli&, dir: str) -> std::vec<std::string> {
     var objs: std::vec<std::string> = {};
     var live: std::map<u32, bool> = {};

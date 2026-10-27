@@ -407,6 +407,24 @@ is the import's error union catches too, mapped the same way:
 starts, so a C++ call in one that throws stops the program as it would anywhere else, and a
 `std::string&` argument is left as it was when the call throws.
 
+## Without the standard library or exceptions
+
+C++ that uses no standard library builds without one: with `CXX="c++ -nostdinc++"`, on a
+freestanding target, or with `-fno-exceptions`, every call above works the same way (classes,
+constructors and destructors, methods and overloads, templates worked out per use, enums, structs
+by value, function pointers, and closures given to a template). The wrappers check what's there
+when they compile and use only that: the standard headers when they're found, else just the type
+traits and placement new a freestanding C++ has (and a few traits of their own without even
+those); Volt's allocator and panic instead of C's when there's no C library; a closure given to a
+template as a small functor instead of a `std::function`. Without exceptions (or without the
+`std::exception` to catch them by), a wrapper catches nothing: the call runs as it is, and a
+`try_` form always gives its value. RTTI goes with the standard library's `typeid`, so
+`cpp_type_name()` and `as_Derived()` between C++ classes stop the program there, as under
+`-fno-rtti`. Nothing to set: the same import works hosted or not. With no C++ library to link at
+all (`-nostdlib++`, with `-fno-exceptions` and `-fno-rtti` so nothing needs its unwinder or type
+info), the program leaves `libstdc++` out and the wrappers bring `new`, `delete` and the
+pure-virtual handler, through Volt's allocator and panic.
+
 ## Subclassing a C++ class in Volt
 
 A C++ framework that calls back through virtual methods takes a Volt type in their place. The Volt

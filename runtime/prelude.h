@@ -629,6 +629,7 @@ VOLT_RT_LINKAGE void volt_fmt_bool(const volt_sink *s, int b, uint32_t fill, int
    arguments. Defined once, in the program's own C unit; prebuilt libraries only call it. */
 void *volt_rt_malloc(size_t n);
 void volt_rt_free(void *p);
+_Noreturn void volt_rt_panic(const char *msg, const char *loc);
 void *volt_rt_realloc(void *p, size_t n);
 extern size_t volt_live_allocs;
 void volt_rt_quarantine_check(void);

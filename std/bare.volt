@@ -153,6 +153,11 @@ namespace bare {
         volt_hook_exit(101);
     }
 
+    // a C++ unit's panic (runtime.h's)
+    export fn volt_rt_panic(msg: cstr, loc: cstr) -> never {
+        volt_panic(msg, loc);
+    }
+
     export fn volt_panic_str(msg: str, loc: cstr) -> never {
         put_cstr(loc);
         put(": panic: ");

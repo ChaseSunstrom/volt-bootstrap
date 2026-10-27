@@ -2717,6 +2717,30 @@ fn cpp_peruse3() {
 }
 
 #[test]
+fn cpp_freestanding() {
+    // C++ with no standard library and no exceptions: the wrappers include no std header and catch
+    // nothing (they check what the build has), and every kind of call still works; hosted too
+    let e = Env::new("cpp-freestanding");
+    let want = "add 11 22\ncounter 9 live 1\nlive 0\ntwice 42 3\ncode 3\napply 5 41\n";
+    for cxx in ["c++", "c++ -nostdinc++ -fno-exceptions", "c++ -fno-exceptions", "c++ -nostdinc++"] {
+        for backend in ["c", "llvm"] {
+            assert_eq!(ok(e.voltc_cxx(&["run", "cpp_freestanding.volt", "--backend", backend], Some(cxx)), "voltc run cpp_freestanding.volt"), want, "C++ without std or exceptions ({cxx}, {backend})");
+        }
+    }
+    // and with no C++ library to link (-nostdlib++): the wrappers bring new and delete, and the
+    // program needs no libstdc++
+    if cfg!(target_os = "linux") {
+        for backend in ["c", "llvm"] {
+            let exe = e.path(&format!("nolib_{backend}"));
+            ok(e.voltc_cxx(&["build", "cpp_freestanding.volt", "--backend", backend, "-o", &exe], Some("c++ -nostdinc++ -nostdlib++ -fno-exceptions -fno-rtti")), "voltc build cpp_freestanding.volt");
+            assert_eq!(ok(Command::new(&exe).output().unwrap(), "the program built with no C++ library"), want, "no C++ library ({backend})");
+            let bytes = std::fs::read(&exe).unwrap();
+            assert!(!bytes.windows(9).any(|w| w == b"libstdc++"), "{backend}: the program still needs libstdc++");
+        }
+    }
+}
+
+#[test]
 fn cpp_peruse5() {
     // calls made per use taking T(&)[N] of an imported enum (the probe names the enum) or of a class
     // held by handle (its objects copied in and back), nested bool slices, a slice of handles (their

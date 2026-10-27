@@ -35,7 +35,7 @@ specialization, packs and constant parameters. Code can run in the compiler (`co
 are values there.
 
 **Every other language is one step away.** Volt reads C headers and C++ headers and modules
-(classes, templates, the standard library) directly, and imports ordinary Rust crates and Zig,
+(classes, templates, and the standard library, or none of it) directly, and imports ordinary Rust crates and Zig,
 Swift, Kotlin, Go, Java, C#, Python, TypeScript and JavaScript code the same way
 (`use { "geom.rs" } as geom;`, like a header); Lua it embeds through a package. The other way
 round, `voltc bindings` (or a `bindings` list in `bolt.toml`) makes a

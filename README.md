@@ -100,7 +100,7 @@ fn main() -> !void {
 - **A standard library** with collections, text, JSON, files, processes, networking, threads,
   allocators you choose per container, hashing and encodings.
 - **Interop**: real C headers (unions and bitfields too), C++ classes, templates and the standard
-  library; Rust crates, Go packages, and Zig, Swift, Kotlin, Java, C#, Python, TypeScript and
+  library (or none: `-nostdinc++`, `-nostdlib++`, `-fno-exceptions`, freestanding targets); Rust crates, Go packages, and Zig, Swift, Kotlin, Java, C#, Python, TypeScript and
   JavaScript files imported by name (`use { "fm.zig" } as fm;`); Lua through a package; and
   libraries with bindings for C, C++, Rust, Zig, Python, JavaScript and TypeScript, C#, Java, Go,
   Lua, Dart, Swift, Kotlin and Ruby.
