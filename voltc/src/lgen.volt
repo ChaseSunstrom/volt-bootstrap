@@ -172,8 +172,22 @@ attach fn check_layout(this: lg&, r: llvm::LLVMOpaqueType*, t: u32) -> void {
     }
 }
 
+// (an odd width as its storage: memory always holds a value wrapped to its bits, see odd_norm)
 attach fn int_lt(this: lg&, k: int_ty) -> llvm::LLVMOpaqueType* {
-    return llvm::LLVMIntTypeInContext(this.ctx, k.bits());
+    return llvm::LLVMIntTypeInContext(this.ctx, k.storage().bits());
+}
+
+// an odd width's operation result v (in its storage) wrapped to its n bits; anything else as it is
+attach fn odd_norm(this: lg&, v: llvm::LLVMOpaqueValue*, t: u32) -> llvm::LLVMOpaqueValue* {
+    val k = this.c.t.int_of(t) ?? return v;
+    if (!k.is_odd() || v == null) {
+        return v;
+    }
+    val narrow = llvm::LLVMBuildTrunc(this.b, v, llvm::LLVMIntTypeInContext(this.ctx, k.bits()), "");
+    if (k.signed()) {
+        return llvm::LLVMBuildSExt(this.b, narrow, this.int_lt(k), "");
+    }
+    return llvm::LLVMBuildZExt(this.b, narrow, this.int_lt(k), "");
 }
 
 // lt without the cache: scalars map directly; an optional, enum or struct that isn't one falls
@@ -2059,6 +2073,15 @@ attach fn index_val(this: lg&, i: u32) -> llvm::LLVMOpaqueValue* {
 
 // node n's value; null when it has none (void, or it diverged)
 attach fn rv(this: lg&, n: u32) -> llvm::LLVMOpaqueValue* {
+    match (this.c.ir.at(n).kind) {
+        .BINARY(op, a, b) => { return this.odd_norm(this.rv_node(n), this.c.ir.ty_of(n)); },
+        .UNARY(op, x) => { return this.odd_norm(this.rv_node(n), this.c.ir.ty_of(n)); },
+        .CONV(x) => { return this.odd_norm(this.rv_node(n), this.c.ir.ty_of(n)); },
+        default => { return this.rv_node(n); },
+    }
+}
+
+attach fn rv_node(this: lg&, n: u32) -> llvm::LLVMOpaqueValue* {
     val t = this.c.ir.ty_of(n);
     match (this.c.ir.at(n).kind) {
         .INT(v) => { return this.int_const(v, t); },
@@ -2511,8 +2534,17 @@ attach fn real_pred(this: lg&, op: binop_ir) -> i32 {
 
 // a + b, a - b, a * b that panic on overflow
 attach fn checked(this: lg&, op: binop_ir, a: u32, b: u32, loc: str, t: u32) -> llvm::LLVMOpaqueValue* {
-    val av = this.rv_as(a, t);
-    val bv = this.rv_as(b, t);
+    var av = this.rv_as(a, t);
+    var bv = this.rv_as(b, t);
+    // an odd width: the operation in its own iN (LLVM's overflow intrinsics take any width), the
+    // result extended back to its storage
+    val ko = this.c.t.int_of(t) ?? int_ty::I64;
+    var at_ty = this.lt(t);
+    if (ko.is_odd()) {
+        at_ty = llvm::LLVMIntTypeInContext(this.ctx, ko.bits());
+        av = llvm::LLVMBuildTrunc(this.b, av, at_ty, "");
+        bv = llvm::LLVMBuildTrunc(this.b, bv, at_ty, "");
+    }
     var name = S("llvm.");
     if (this.int_signed(t)) {
         name.push('s');
@@ -2527,7 +2559,7 @@ attach fn checked(this: lg&, op: binop_ir, a: u32, b: u32, loc: str, t: u32) -> 
     name.append(".with.overflow");
     val id = llvm::LLVMLookupIntrinsicID(this.z(name.as_str()), name.len());
     var tys: std::vec<llvm::LLVMOpaqueType*> = {};
-    put(&tys, this.lt(t));
+    put(&tys, at_ty);
     val fv = llvm::LLVMGetIntrinsicDeclaration(this.m, id, tys.ptr, 1);
     val fty = llvm::LLVMIntrinsicGetType(this.ctx, id, tys.ptr, 1);
     var args: std::vec<llvm::LLVMOpaqueValue*> = {};
@@ -2541,7 +2573,14 @@ attach fn checked(this: lg&, op: binop_ir, a: u32, b: u32, loc: str, t: u32) -> 
     this.at_block(bad);
     this.panic("integer overflow", loc);
     this.at_block(ok);
-    return llvm::LLVMBuildExtractValue(this.b, r, 0, "");
+    val rv = llvm::LLVMBuildExtractValue(this.b, r, 0, "");
+    if (ko.is_odd()) {
+        if (ko.signed()) {
+            return llvm::LLVMBuildSExt(this.b, rv, this.lt(t), "");
+        }
+        return llvm::LLVMBuildZExt(this.b, rv, this.lt(t), "");
+    }
+    return rv;
 }
 
 // a call to volt_panic(msg, loc), which ends the block

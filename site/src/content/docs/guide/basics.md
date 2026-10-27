@@ -30,12 +30,41 @@ fn main() -> void {
 
 Function parameters are `val`s too; `fn f(var x: i32)` gives the function its own mutable copy.
 
+## Integers of any width
+
+Besides the standard sizes, an integer can have any width from 1 to 128 bits: `u3`, `i7`, `u24`,
+`u48`, `i100`. Each is held in the next standard size up (`@sizeof(u24)` is 4, `@sizeof(i100)` is
+16) and computes as its width says: a literal out of range is an error, a debug build stops the
+program when `+`, `-` or `*` overflows the width (`integer overflow`) and a release build wraps
+there, `+%`, `-%` and `*%` always wrap at it, and a cast truncates or extends to it. A narrower one
+widens to a wider one as the standard integers do, and printing, comparing, hashing and `@typeinfo`
+(`@typeinfo(u24).short_name` is `"u24"`) all work. Zig's own `u3` or `u24` comes in as exactly that (see
+[Volt calls Zig](/volt-bootstrap/interop/rust-and-zig/#volt-calls-zig)). Nothing here needs std, and
+each operation costs one extra instruction or two to wrap the value to its width.
+
+```volt
+use std::io;
+
+fn main() -> void {
+    val c: u24 = 16777215;
+    val b: i7 = -64;
+    std::println("{} {} {}", c +% 1, b -% 1, @cast<u3>(13));
+    std::println("{} {}", @sizeof(u24), @sizeof(u48));
+}
+// expect: 0 63 5
+// expect: 4 8
+```
+
+A C function or a binding that calls an `export fn` taking one passes its storage size; a value out
+of the width's range stops the program at the call (`argument 'x' is out of u24's range`).
+
 ## Types
 
 | Type | What it is |
 | --- | --- |
 | `i8` `i16` `i32` `i64` `i128`, `isize` | signed integers |
 | `u8` `u16` `u32` `u64` `u128`, `usize` | unsigned integers (`usize` for sizes and indexes) |
+| `i1`…`i128`, `u1`…`u128` | integers of any other width (`u3`, `i7`, `u24`): see [Any width](#integers-of-any-width) |
 | `f16` `f32` `f64` `f128` | floating point |
 | `bool` | `true` or `false` |
 | `str` | UTF-8 text: a pointer and a length, not null-terminated |

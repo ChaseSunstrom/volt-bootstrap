@@ -318,6 +318,19 @@ VOLT_CHECKED(i8, int8_t) VOLT_CHECKED(i16, int16_t) VOLT_CHECKED(i32, int32_t) V
 VOLT_CHECKED(i128, volt_i128) VOLT_CHECKED(isize, ptrdiff_t)
 VOLT_CHECKED(u8, uint8_t) VOLT_CHECKED(u16, uint16_t) VOLT_CHECKED(u32, uint32_t) VOLT_CHECKED(u64, uint64_t)
 VOLT_CHECKED(u128, volt_u128) VOLT_CHECKED(usize, size_t)
+/* an odd-width int (u24, i7) lives in its storage (the next standard int up) and is wrapped to its n
+   bits after each operation; a checked one's result must fit them */
+#define VOLT_UNORM(T, x, n) ((T)((T)(x) & (T)(((T)1 << (n)) - 1)))
+#define VOLT_INORM(T, UT, x, n) ((T)((T)((UT)(x) << (sizeof(T) * 8 - (n))) >> (sizeof(T) * 8 - (n))))
+#define VOLT_FIT(N, T, UT) \
+    static inline T volt_fit_##N(T r, unsigned n, const char *loc) { \
+        if ((T)-1 < (T)0 ? (r < -(T)((UT)1 << (n - 1)) || r >= (T)((UT)1 << (n - 1))) : ((UT)r >> n) != 0) volt_panic("integer overflow", loc); \
+        return r; \
+    }
+VOLT_FIT(i8, int8_t, uint8_t) VOLT_FIT(i16, int16_t, uint16_t) VOLT_FIT(i32, int32_t, uint32_t) VOLT_FIT(i64, int64_t, uint64_t)
+VOLT_FIT(i128, volt_i128, volt_u128)
+VOLT_FIT(u8, uint8_t, uint8_t) VOLT_FIT(u16, uint16_t, uint16_t) VOLT_FIT(u32, uint32_t, uint32_t) VOLT_FIT(u64, uint64_t, uint64_t)
+VOLT_FIT(u128, volt_u128, volt_u128)
 /* Atomics for libraries (std::thread binds them with @intrinsic): sequentially consistent load, store,
    swap, add (giving the old value) and compare-and-swap on 32- and 64-bit words */
 #define VOLT_ATOMICS(N, T) \

@@ -49,12 +49,13 @@ fn int_c(k: int_ty) -> str {
         .U64 => { return "uint64_t"; },
         .U128 => { return "volt_u128"; },
         .USIZE => { return "size_t"; },
+        default => { return int_c(k.storage()); }, // an odd width: its storage's
     }
 }
 
 // the unsigned C type wrapping arithmetic is done in (at least unsigned int, so no promotion to int)
 fn int_wrap_c(k: int_ty) -> str {
-    val b = k.bits();
+    val b = k.storage().bits();
     if (b <= 32) {
         return "uint32_t";
     }
@@ -917,7 +918,7 @@ attach fn int_lit(this: cgen&, out: std::string&, v: i128, t: u32) -> void {
         out.push(')');
         return;
     }
-    if (k.bits() == 128) {
+    if (k.storage().bits() == 128) {
         val u = @cast<u128>(v);
         out.append("((");
         out.append(this.ty(t));
@@ -1157,6 +1158,42 @@ attach fn is_place(this: cgen&, n: u32) -> bool {
 
 // node n as a C expression; statements in value position become GNU statement expressions ({ ... })
 attach fn expr(this: cgen&, out: std::string&, n: u32) -> void {
+    // an odd width's arithmetic, negation or conversion: computed in its storage, then wrapped to
+    // its width, so every value of it in memory stays in range
+    val ok = this.c.t.int_of(this.c.ir.ty_of(n));
+    if (ok) {
+        val k = ok;
+        var norm = false;
+        match (this.c.ir.at(n).kind) {
+            .BINARY(op, a, b) => { norm = true; },
+            .UNARY(op, x) => { norm = true; },
+            .CONV(x) => { norm = true; },
+            default => {},
+        }
+        if (norm && k.is_odd()) {
+            val st = k.storage();
+            if (k.signed()) {
+                out.append("VOLT_INORM(");
+                out.append(int_c(st));
+                out.append(", ");
+                out.append(int_c(int_bits(st.bits(), false)));
+                out.append(", ");
+            } else {
+                out.append("VOLT_UNORM(");
+                out.append(int_c(st));
+                out.append(", ");
+            }
+            this.expr_node(out, n);
+            out.append(", ");
+            out.append_uint(@cast<u64>(k.bits()));
+            out.push(')');
+            return;
+        }
+    }
+    this.expr_node(out, n);
+}
+
+attach fn expr_node(this: cgen&, out: std::string&, n: u32) -> void {
     val t = this.c.ir.ty_of(n);
     if (this.in_init && this.is_f128(t)) {
         // a negated or converted literal in a global's initializer: the bits, folded (a literal
@@ -1394,14 +1431,21 @@ attach fn expr(this: cgen&, out: std::string&, n: u32) -> void {
         },
         .BINARY(op, a, b) => { this.binary(out, op, a, b, t); },
         .CHECKED(op, a, b, loc) => {
-            // volt_add_i32(a, b, "file:line:col"): the prelude's checked arithmetic
+            // volt_add_i32(a, b, "file:line:col"): the prelude's checked arithmetic; an odd width's
+            // in its storage, then range-checked at its width (volt_fit_u32(r, 24, loc))
+            val odd = this.c.t.int_of(t) ?? int_ty::I64;
+            if (odd.is_odd()) {
+                out.append("volt_fit_");
+                out.append(odd.storage().name());
+                out.push('(');
+            }
             out.append("volt_");
             match (op) {
                 .SUB => { out.append("sub_"); },
                 .MUL => { out.append("mul_"); },
                 default => { out.append("add_"); },
             }
-            val k = this.c.t.int_of(t) ?? int_ty::I64;
+            val k = (this.c.t.int_of(t) ?? int_ty::I64).storage();
             out.append(k.name());
             out.push('(');
             this.full_as(out, a, t);
@@ -1410,6 +1454,13 @@ attach fn expr(this: cgen&, out: std::string&, n: u32) -> void {
             out.append(", ");
             put_c_str(out, loc);
             out.push(')');
+            if (odd.is_odd()) {
+                out.append(", ");
+                out.append_uint(@cast<u64>(odd.bits()));
+                out.append(", ");
+                put_c_str(out, loc);
+                out.push(')');
+            }
         },
         .CONV(x) => {
             // to bool compares with zero instead of truncating
@@ -2207,7 +2258,7 @@ attach fn switch_stmt(this: cgen&, out: std::string&, v: u32, cases: std::vec<ca
     var wide = false;
     val k = this.c.t.int_of(vt);
     if (k) {
-        wide = k.bits() == 128;
+        wide = k.storage().bits() == 128;
     }
     match (*this.c.t.get(vt)) {
         .ENUM(e) => { wide = this.c.ei(e).tag.bits() == 128; },

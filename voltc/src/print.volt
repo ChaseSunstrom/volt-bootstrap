@@ -557,11 +557,14 @@ attach fn out_rt(this: checker&, sink: u32, f: str, v: u32) -> u32 {
 attach fn print_code(this: checker&, code: std::vec<u32>&, sink: u32, c: u32, t: u32, span: span) -> compile_error!void {
     match (*this.t.get(t)) {
         .INT(k) => {
-            if (k.bits() == 128) {
+            if (k.bits() > 64) {
+                // (an odd width past 64 bits, i100, printed as its 128-bit storage's value)
                 if (k.signed()) {
-                    put(code, (try this.rt_print("volt_print_i128", sink, c)) ?? this.out_rt(sink, "volt_print_i128", c));
+                    val v = this.ir.conv(c, int_id(int_ty::I128));
+                    put(code, (try this.rt_print("volt_print_i128", sink, v)) ?? this.out_rt(sink, "volt_print_i128", v));
                 } else {
-                    put(code, (try this.rt_print("volt_print_u128", sink, c)) ?? this.out_rt(sink, "volt_print_u128", c));
+                    val v = this.ir.conv(c, int_id(int_ty::U128));
+                    put(code, (try this.rt_print("volt_print_u128", sink, v)) ?? this.out_rt(sink, "volt_print_u128", v));
                 }
             } else if (k.signed()) {
                 val v = this.ir.conv(c, I64);

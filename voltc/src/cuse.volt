@@ -191,8 +191,9 @@ attach fn c_spell(this: checker&, k: usize, t: u32, alt: bool) -> std::string? {
             }
             return null;
         },
-        .INT(i) => {
-            match (i) {
+        .INT(i0) => {
+            // (an odd width as its storage)
+            match (i0.storage()) {
                 .I8 => { return S("signed char"); },
                 .I16 => { return S("short"); },
                 .I32 => { return S("int"); },
@@ -215,6 +216,7 @@ attach fn c_spell(this: checker&, k: usize, t: u32, alt: bool) -> std::string? {
                 },
                 .U128 => { return S("unsigned __int128"); },
                 .USIZE => { return S("__SIZE_TYPE__"); },
+                default => { return null; },
             }
         },
         .REF(x) => {

@@ -398,6 +398,20 @@ attach fn gen_fn(this: checker&, idx: u32) -> compile_error!void {
             c = this.ir.node(ir_kind::LOCAL(lid), p.ty);
             k += 1;
         }
+        // an odd-width parameter of a fn C (or a binding) calls: its storage's value must be in range
+        if (f.is_export || f.extern_abi != null) {
+            val ok = this.t.int_of(p.ty);
+            if (ok) {
+                val k = ok;
+                if (k.is_odd()) {
+                    val st = int_id(k.storage());
+                    val wrapped = this.ir.conv(this.ir.conv(c, st), p.ty);
+                    val bad = this.ir.binary(binop_ir::NE, wrapped, c, BOOL);
+                    val msg = this.intern(fmt2("argument '{}' is out of {}'s range", S(p.name), S(k.name())));
+                    put(&stmts, this.ir.if_(bad, this.ir.panic(msg, this.loc(this.item_of(decl).span)), null));
+                }
+            }
+        }
         var l: local = { c: c, ty: p.ty, mutable: p.mutable, root: p.name, param: true, own: c };
         if (i < 64 && ((inst.ro_texts >> @cast<u32>(i)) & 1) != 0) {
             l.ro = 1; // a std::string a val lent (ro_text_inst)

@@ -3496,7 +3496,7 @@ attach fn rust_ty(this: bind&, t: u32) -> std::string {
     match (sh) {
         .VOID => { return S("()"); },
         .BOOL => { return S("bool"); },
-        .INT(k) => { return S(k.name()); },
+        .INT(k) => { return S(k.storage().name()); },
         .FLOAT(b) => {
             if (b == 32) {
                 return S("f32");
@@ -4264,7 +4264,7 @@ attach fn zig_ty(this: bind&, t: u32) -> std::string {
     match (sh) {
         .VOID => { return S("void"); },
         .BOOL => { return S("bool"); },
-        .INT(k) => { return S(k.name()); },
+        .INT(k) => { return S(k.storage().name()); },
         .FLOAT(b) => {
             if (b == 32) {
                 return S("f32");
@@ -6728,7 +6728,8 @@ fn cs_ident(s: str) -> std::string {
     return S(s);
 }
 
-fn cs_int(k: int_ty) -> str {
+fn cs_int(k0: int_ty) -> str {
+    val k = k0.storage(); // (an odd width as its storage)
     if (k == int_ty::I8) {
         return "sbyte";
     }
@@ -9528,7 +9529,8 @@ fn go_name(s: str) -> std::string {
 }
 
 // i32 -> int32, u8 -> uint8
-fn go_int(k: int_ty) -> std::string {
+fn go_int(k0: int_ty) -> std::string {
+    val k = k0.storage(); // (an odd width as its storage)
     var s = S("int");
     if (!k.signed()) {
         s = S("uint");
@@ -10996,7 +10998,8 @@ attach fn node_get_simple(this: bind&, t: u32, js: str, c: str) -> std::string {
 }
 
 // the check that an integer read as v_ (64 bits) fits a narrower C type
-fn node_range(k: int_ty) -> std::string {
+fn node_range(k0: int_ty) -> std::string {
+    val k = k0.storage(); // (an odd width as its storage)
     var lo = "";
     var hi = "";
     if (k == int_ty::I8) {
@@ -12518,7 +12521,8 @@ attach fn lua_elem(this: bind&, e: u32, idx: str, c: str, what: str, kp: str, ho
 }
 
 // the range of a C integer type, as two lua_Integer expressions
-fn lua_limits(k: int_ty) -> std::string {
+fn lua_limits(k0: int_ty) -> std::string {
+    val k = k0.storage(); // (an odd width as its storage)
     match (k) {
         .I8 => { return S("INT8_MIN, INT8_MAX"); },
         .I16 => { return S("INT16_MIN, INT16_MAX"); },
@@ -13728,7 +13732,8 @@ fn dart_ident(s: str) -> std::string {
     return S(s);
 }
 
-fn dart_int(k: int_ty) -> str {
+fn dart_int(k0: int_ty) -> str {
+    val k = k0.storage(); // (an odd width as its storage)
     match (k) {
         .I8 => { return "Int8"; },
         .I16 => { return "Int16"; },
@@ -15250,7 +15255,8 @@ fn swift_label(s: str) -> std::string {
     return S(s);
 }
 
-fn swift_int(k: int_ty) -> str {
+fn swift_int(k0: int_ty) -> str {
+    val k = k0.storage(); // (an odd width as its storage)
     match (k) {
         .I8 => { return "Int8"; },
         .I16 => { return "Int16"; },
@@ -16730,7 +16736,8 @@ fn kt_method(s: str) -> std::string {
     return n;
 }
 
-fn kt_int(k: int_ty) -> str {
+fn kt_int(k0: int_ty) -> str {
+    val k = k0.storage(); // (an odd width as its storage)
     match (k) {
         .I8 => { return "Byte"; },
         .I16 => { return "Short"; },
@@ -17928,7 +17935,8 @@ attach fn rb_get(this: bind&, t: u32, v: str, c: str, what: str) -> std::string 
 }
 
 // the call reading an integer of kind k from v, up to its last argument (what)
-fn rb_int_call(k: int_ty, v: str) -> std::string {
+fn rb_int_call(k0: int_ty, v: str) -> std::string {
+    val k = k0.storage(); // (an odd width as its storage)
     match (k) {
         .I8 => { return fmt("vr_int({}, INT8_MIN, INT8_MAX", S(v)); },
         .I16 => { return fmt("vr_int({}, INT16_MIN, INT16_MAX", S(v)); },

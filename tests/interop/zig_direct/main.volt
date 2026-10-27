@@ -7,11 +7,15 @@ use { "kinds.zig" } as kd;
 use { "impl.zig" } as im;
 
 fn kinds() -> void {
-    // a packed struct: a Volt struct, its odd-width fields in the next Volt integer up
+    // a packed struct: a Volt struct, its odd-width fields Volt's own (u3, i7)
     var f: kd::Flags = { a: true, b: 5, c: -3 };
     f.c = -60;
     val g = kd::makeFlags(-2);
     std::println("packed {} {} {} {} {}", f.b, f.c, kd::flagsSum(f), g.b, g.c);
+    // odd widths cross as themselves: a u24 result and a u3 field wrap at their widths, i7 and u3
+    // parameters
+    val c24 = kd::rgb24(255, 255, 255);
+    std::println("odd {} {} {} {}", kd::rgb24(1, 2, 3), c24 +% 1, kd::widen7(-5, 6), g.b +% 1);
 
     // a tagged union: a handle, made per variant, read by its tag and as_ reads
     var s = kd::Shape::circle(2.0);

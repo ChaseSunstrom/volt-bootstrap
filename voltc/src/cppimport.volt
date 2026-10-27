@@ -10031,8 +10031,9 @@ attach fn cpp_c_member(this: checker&, t: u32, name: std::string) -> std::string
             }
         },
         .BOOL => { leaf = S("bool"); },
-        .INT(k) => {
-            match (k) {
+        .INT(k0) => {
+            // (an odd width as its storage)
+            match (k0.storage()) {
                 .I8 => { leaf = S("signed char"); },
                 .U8 => { leaf = S("signed char"); },
                 .I16 => { leaf = S("short"); },
@@ -10055,6 +10056,7 @@ attach fn cpp_c_member(this: checker&, t: u32, name: std::string) -> std::string
                         leaf = S("volt_c_i128");
                     }
                 },
+                default => {},
             }
         },
         .FLOAT(b) => {

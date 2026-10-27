@@ -16,6 +16,15 @@ pub fn makeFlags(c: i8) Flags {
     return .{ .a = false, .b = 7, .c = @intCast(c) };
 }
 
+// odd widths: Volt's u24, i7 and u3 are Zig's own
+pub fn rgb24(r: u8, g: u8, b: u8) u24 {
+    return (@as(u24, r) << 16) | (@as(u24, g) << 8) | b;
+}
+
+pub fn widen7(x: i7, y: u3) i32 {
+    return @as(i32, x) * 10 + y;
+}
+
 pub const Rect = struct { w: f32, h: f32 };
 
 pub const Shape = union(enum) {

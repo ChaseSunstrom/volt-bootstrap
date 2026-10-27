@@ -780,7 +780,11 @@ attach fn shift(this: checker&, op: binop, a: tval, b: tval, span: span) -> comp
             default => {},
         }
         var amt = bb.c;
-        if (!under) {
+        if (!under && k.is_odd()) {
+            // (an odd width: modulo it, the amount read unsigned)
+            val u64t = int_id(int_ty::U64);
+            amt = this.ir.conv(this.ir.binary(binop_ir::REM, this.ir.conv(bb.c, u64t), this.ir.int(@cast<i128>(k.bits()), u64t), u64t), bb.ty);
+        } else if (!under) {
             amt = this.ir.binary(binop_ir::BITAND, bb.c, this.ir.int(@cast<i128>(k.bits() - 1), bb.ty), bb.ty);
         }
         return vnew(a.ty, this.ir.binary(o, a.c, amt, a.ty));

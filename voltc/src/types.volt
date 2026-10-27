@@ -5,6 +5,117 @@ use std::mem;
 enum int_ty {
     I8, I16, I32, I64, I128, ISIZE,
     U8, U16, U32, U64, U128, USIZE,
+    // any other width from 1 to 128 bits (i7, u24, u48): held in the next standard size up, its
+    // arithmetic wrapping or trapping at its own width (int_bits makes one, the standard widths
+    // their own variants)
+    IN: u32,
+    UN: u32,
+}
+
+attach operator ==(this: int_ty&, o: int_ty&) -> bool {
+    match (*this) {
+        .IN(a) => {
+            match (*o) {
+                .IN(b) => { return a == b; },
+                default => { return false; },
+            }
+        },
+        .UN(a) => {
+            match (*o) {
+                .UN(b) => { return a == b; },
+                default => { return false; },
+            }
+        },
+        default => {},
+    }
+    match (*o) {
+        .IN(b) => { return false; },
+        .UN(b) => { return false; },
+        default => {},
+    }
+    return this.std_index() == o.std_index();
+}
+
+// a standard int's place in INTS (an odd width's: 12)
+attach fn std_index(this: int_ty&) -> u32 {
+    match (*this) {
+        .I8 => { return 0; },
+        .I16 => { return 1; },
+        .I32 => { return 2; },
+        .I64 => { return 3; },
+        .I128 => { return 4; },
+        .ISIZE => { return 5; },
+        .U8 => { return 6; },
+        .U16 => { return 7; },
+        .U32 => { return 8; },
+        .U64 => { return 9; },
+        .U128 => { return 10; },
+        .USIZE => { return 11; },
+        default => { return 12; },
+    }
+}
+
+// the int of `bits` (1 to 128) and signedness: a standard one's own variant, else IN or UN
+fn int_bits(bits: u32, signed: bool) -> int_ty {
+    if (signed) {
+        if (bits == 8) { return int_ty::I8; }
+        if (bits == 16) { return int_ty::I16; }
+        if (bits == 32) { return int_ty::I32; }
+        if (bits == 64) { return int_ty::I64; }
+        if (bits == 128) { return int_ty::I128; }
+        return int_ty::IN(bits);
+    }
+    if (bits == 8) { return int_ty::U8; }
+    if (bits == 16) { return int_ty::U16; }
+    if (bits == 32) { return int_ty::U32; }
+    if (bits == 64) { return int_ty::U64; }
+    if (bits == 128) { return int_ty::U128; }
+    return int_ty::UN(bits);
+}
+
+// an odd width's storage: the standard int of the next size up (8 at least), the same signedness;
+// a standard int is its own
+attach fn storage(this: int_ty&) -> int_ty {
+    match (*this) {
+        .IN(n) => { return int_bits(store_bits(n), true); },
+        .UN(n) => { return int_bits(store_bits(n), false); },
+        default => { return *this; },
+    }
+}
+
+attach fn is_odd(this: int_ty&) -> bool {
+    match (*this) {
+        .IN(n) => { return true; },
+        .UN(n) => { return true; },
+        default => { return false; },
+    }
+}
+
+fn store_bits(n: u32) -> u32 {
+    var b: u32 = 8;
+    while (b < n) {
+        b *= 2;
+    }
+    return b;
+}
+
+// the odd widths' names (i1..i128, then u1..u128), made once: int_ty::name gives views of them
+var odd_int_names: std::vec<std::string> = {};
+
+fn make_odd_int_names() -> void {
+    if (odd_int_names.len > 0) {
+        return;
+    }
+    for (s) in 0..2 {
+        for (n) in 1..129 {
+            var name = S("i");
+            if (s == 1) {
+                name = S("u");
+            }
+            name.append_uint(@cast<u64>(n));
+            put(&odd_int_names, move name);
+        }
+    }
 }
 
 // every int type; an int's type id is INT_BASE + its index here, so the order is fixed
@@ -15,6 +126,7 @@ val INTS: int_ty[] = {
 
 attach fn signed(this: int_ty&) -> bool {
     match (*this) {
+        .IN(n) => { return true; },
         .I8 => { return true; },
         .I16 => { return true; },
         .I32 => { return true; },
@@ -30,6 +142,8 @@ var usize_bits: u32 = 64;
 
 attach fn bits(this: int_ty&) -> u32 {
     match (*this) {
+        .IN(n) => { return n; },
+        .UN(n) => { return n; },
         .ISIZE => { return usize_bits; },
         .USIZE => { return usize_bits; },
         .I8 => { return 8; },
@@ -58,13 +172,16 @@ attach fn name(this: int_ty&) -> str {
         .U64 => { return "u64"; },
         .U128 => { return "u128"; },
         .USIZE => { return "usize"; },
+        .IN(n) => { return odd_int_names.at(@cast<usize>(n - 1)).as_str(); },
+        .UN(n) => { return odd_int_names.at(@cast<usize>(127 + n)).as_str(); },
     }
 }
 
 // the type's name for a range error: usize and isize with their width where it isn't 64 bits
 attach fn fit_name(this: int_ty&) -> std::string {
     var n = S(this.name());
-    if ((*this == int_ty::USIZE || *this == int_ty::ISIZE) && usize_bits != 64) {
+    val me = *this;
+    if ((me == int_ty::USIZE || me == int_ty::ISIZE) && usize_bits != 64) {
         n.append(" (");
         n.append_uint(@cast<u64>(usize_bits));
         n.append(" bits on this target)");
@@ -182,8 +299,17 @@ val U8: u32 = 19;
 val U32: u32 = 21;
 val USIZE: u32 = 24;
 
+// the odd widths' fixed type ids: i1..i128 from ODD_BASE, then u1..u128 (new_types interns them
+// right after the standard ints; i8, u16... among them are never used, int_bits giving I8, U16)
+val ODD_BASE: u32 = 25;
+
 // the fixed type id of an int type
 fn int_id(k: int_ty) -> u32 {
+    match (k) {
+        .IN(n) => { return ODD_BASE + n - 1; },
+        .UN(n) => { return ODD_BASE + 127 + n; },
+        default => {},
+    }
     for (x, i) in INTS {
         if (x == k) {
             return INT_BASE + @cast<u32>(i);
@@ -219,6 +345,9 @@ fn ty_key(t: tyk&) -> std::string {
         },
         .INT(i) => {
             k.append("i");
+            if (i.is_odd()) {
+                k.push('o'); // (IN(8) is never made, but new_types interns it: not I8's key)
+            }
             k.append(i.name());
         },
         .REF(x) => { key_one(&k, "R", x); },
@@ -306,6 +435,13 @@ fn new_types() -> types {
     t.intern(tyk::ANYERR);
     for (k) in INTS {
         t.intern(tyk::INT(k));
+    }
+    make_odd_int_names();
+    for (n) in 1..129 {
+        t.intern(tyk::INT(int_ty::IN(@cast<u32>(n))));
+    }
+    for (n) in 1..129 {
+        t.intern(tyk::INT(int_ty::UN(@cast<u32>(n))));
     }
     return t;
 }
@@ -402,6 +538,20 @@ fn primitive(name: str) -> u32? {
     for (k, i) in INTS {
         if (k.name() == name) {
             return INT_BASE + @cast<u32>(i);
+        }
+    }
+    // u3, i24, u100: any other width from 1 to 128
+    if (name.len >= 2 && name.len <= 4 && (name[0] == 'i' || name[0] == 'u') && name[1] != '0') {
+        var n: u32 = 0;
+        for (j) in 1..name.len {
+            val c = name[j];
+            if (c < '0' || c > '9') {
+                return null;
+            }
+            n = n * 10 + @cast<u32>(c - '0');
+        }
+        if (n >= 1 && n <= 128) {
+            return int_id(int_bits(n, name[0] == 'i'));
         }
     }
     return null;

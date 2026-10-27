@@ -4124,7 +4124,7 @@ attach fn layout_rec(this: checker&, ts: std::vec<u32>&, span: span) -> compile_
 attach fn vector_of(this: checker&, t: u32, n: u64, span: span) -> compile_error!u32 {
     var number = false;
     match (*this.t.get(t)) {
-        .INT(k) => { number = k.bits() <= 64; },
+        .INT(k) => { number = k.bits() <= 64 && !k.is_odd(); }, // (lanes of 8, 16, 32 or 64 bits)
         .FLOAT(b) => { number = b == 32 || b == 64; },
         default => {},
     }
@@ -4204,7 +4204,8 @@ attach fn layout(this: checker&, t: u32, span: span) -> compile_error!lay {
         .NEVER => { return { size: 0, align: 1 }; },
         .BOOL => { return { size: 1, align: 1 }; },
         .INT(k) => {
-            val b = @cast<u64>(k.bits() / 8);
+            // (an odd width takes its storage's room)
+            val b = @cast<u64>(k.storage().bits() / 8);
             return { size: b, align: this.scalar_align(b, true) };
         },
         .FLOAT(b) => {

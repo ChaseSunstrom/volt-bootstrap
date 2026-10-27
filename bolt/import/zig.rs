@@ -743,14 +743,36 @@ fn skip_decl(c: &mut Cur) {
     }
 }
 
-/// an integer of a width Volt doesn't have (u3, i7, u24): the next Volt integer up, signedness kept
-fn odd_int(n: &str) -> Option<&'static str> {
-    let bits: u32 = n.get(1..)?.parse().ok()?;
-    let at = [8, 16, 32, 64].iter().position(|w| bits <= *w).filter(|_| bits > 0)?;
-    match n.as_bytes()[0] {
-        b'u' => Some(["u8", "u16", "u32", "u64"][at]),
-        b'i' => Some(["i8", "i16", "i32", "i64"][at]),
-        _ => None,
+/// an integer of an odd width (u3, i7, u24: 1 to 128 bits, not 8, 16, 32, 64 or 128): its name, as
+/// Volt has it too
+fn odd_exact(n: &str) -> Option<&'static str> {
+    let bits: u32 = n.get(1..).filter(|d| !d.starts_with('0'))?.parse().ok()?;
+    if !(1..=128).contains(&bits) || [8, 16, 32, 64, 128].contains(&bits) || !matches!(n.as_bytes()[0], b'u' | b'i') {
+        return None;
+    }
+    // (bolt runs once: the few names it meets live as long as it)
+    Some(Box::leak(n.to_string().into_boxed_str()))
+}
+
+/// an odd width's storage, the next integer up (C's ABI and an extern struct take only those); any
+/// other type as it is
+fn odd_store(x: &str) -> &str {
+    if odd_exact(x).is_none() {
+        return x;
+    }
+    let bits: u32 = x[1..].parse().unwrap_or(0);
+    let at = [8, 16, 32, 64, 128].iter().position(|w| bits <= *w).unwrap_or(4);
+    if x.starts_with('u') { ["u8", "u16", "u32", "u64", "u128"][at] } else { ["i8", "i16", "i32", "i64", "i128"][at] }
+}
+
+/// an odd width somewhere inside a slice, array, pointer, optional or collection
+fn odd_inside(t: &Ty) -> bool {
+    let odd = |e: &Ty| matches!(e, Ty::Prim(x) if odd_exact(x).is_some()) || odd_inside(e);
+    match t {
+        Ty::Slice(e, _) | Ty::Array(e, _) | Ty::Ptr(e, _) | Ty::Ref(e, _) | Ty::Opt(e) | Ty::Vec(e) | Ty::Res(e) => odd(e),
+        Ty::Map(k, v) => odd(k) || odd(v),
+        Ty::Tuple(es) => es.iter().any(|(_, e)| odd(e)),
+        _ => false,
     }
 }
 
@@ -783,11 +805,8 @@ fn fields_in(b: &[Tok], gens: &[String], units: bool) -> Vec<(String, bool, Opti
             }
             c.i += 1;
         }
-        // (a field's u3 holds its value in a u8: the shim's @intCast checks it fits)
-        let ty = match parse_ty_in(&b[s..c.i], None, gens) {
-            Some(Ty::Named(n)) => Some(odd_int(&n).map_or(Ty::Named(n), Ty::Prim)),
-            t => t,
-        };
+        // (a field's u3 is Volt's u3; the shim's extern struct holds it in a u8)
+        let ty = parse_ty_in(&b[s..c.i], None, gens);
         while c.i < b.len() && !c.is(",") {
             if c.is("(") || c.is("{") || c.is("[") {
                 c.skip_group();
@@ -909,8 +928,12 @@ fn parse_ty(t: &[Tok], owner: Option<&str>) -> Option<Ty> {
 
 /// parse_ty, with these type parameters in scope (and @TypeOf(x) of an anytype x, T_x)
 fn parse_ty_in(t: &[Tok], owner: Option<&str>, gens: &[String]) -> Option<Ty> {
+    parse_ty_raw(t, owner, gens).filter(|t| !odd_inside(t))
+}
+
+fn parse_ty_raw(t: &[Tok], owner: Option<&str>, gens: &[String]) -> Option<Ty> {
     let is = |i: usize, p: &str| matches!(t.get(i), Some(Tok::P(q)) if q == p);
-    let parse_ty = |t: &[Tok], owner: Option<&str>| parse_ty_in(t, owner, gens);
+    let parse_ty = |t: &[Tok], owner: Option<&str>| parse_ty_raw(t, owner, gens);
     match t {
         [Tok::Id(n)] if gens.contains(n) => Some(Ty::Generic(n.clone())),
         [Tok::Id(f), Tok::P(a), Tok::Id(x), Tok::P(b)] if f == "@TypeOf" && a == "(" && b == ")" && gens.contains(&format!("T_{x}")) => Some(Ty::Generic(format!("T_{x}"))),
@@ -1031,7 +1054,7 @@ fn parse_ty_in(t: &[Tok], owner: Option<&str>, gens: &[String]) -> Option<Ty> {
                 "c_ushort" => Ty::Prim("u16"),
                 "c_char" => Ty::Prim("u8"),
                 n if owner == Some(n) => Ty::SelfTy,
-                n => match prim(n) {
+                n => match prim(n).or_else(|| odd_exact(n)) {
                     Some(p) => Ty::Prim(p),
                     None if ["type", "comptime_int", "comptime_float", "noreturn", "anyopaque", "anyerror"].contains(&n) => return None,
                     None => Ty::Named(n.to_string()),
@@ -1092,8 +1115,9 @@ impl Lang for Zig {
             Ty::Alloc => p.arg = "alloc".into(),
             Ty::Comptime(z) => p.arg = z.clone(),
             Ty::Prim(x) => {
-                p.params.push(format!("{a}: {x}"));
-                p.arg = a.to_string();
+                // (an odd width in its storage, into its own width: Volt's value is in range)
+                p.params.push(format!("{a}: {}", odd_store(x)));
+                p.arg = if odd_exact(x).is_some() { format!("@intCast({a})") } else { a.to_string() };
             }
             Ty::Str => {
                 p.params.extend([format!("{a}: ?[*]const u8"), format!("{a}_n: usize")]);
@@ -1385,7 +1409,7 @@ impl Lang for Zig {
     fn out(&self, g: &Gen, t: &Ty, o: &str, owned: bool) -> Option<ShimOut> {
         let put = if owned { "put_owned" } else { "put_copy" };
         Some(match t {
-            Ty::Prim(x) => ShimOut { params: vec![format!("{o}: *{x}")], store: format!("{o}.* = $v;") },
+            Ty::Prim(x) => ShimOut { params: vec![format!("{o}: *{}", odd_store(x))], store: format!("{o}.* = $v;") },
             Ty::Str => ShimOut { params: vec![format!("{o}: *?[*]u8"), format!("{o}_n: *usize")], store: format!("{put}(u8, $v, {o}, {o}_n);") },
             Ty::Slice(e, _) => match **e {
                 Ty::Prim(x) => ShimOut { params: vec![format!("{o}: *?[*]{x}"), format!("{o}_n: *usize")], store: format!("{put}({x}, $v, {o}, {o}_n);") },
@@ -1553,7 +1577,7 @@ impl Lang for Zig {
                 for (f, _, t) in ti.def.fields.clone().unwrap_or_default() {
                     match t {
                         Some(Ty::Prim(x)) => {
-                            let _ = writeln!(fields, "    {f}: {x},");
+                            let _ = writeln!(fields, "    {f}: {},", odd_store(x));
                             // (an integer into the field's own width: a u3's checked)
                             let _ = write!(from, "{}", if matches!(x, "bool" | "f32" | "f64") { format!(".{f} = v.{f}, ") } else { format!(".{f} = @intCast(v.{f}), ") });
                             let _ = write!(to, ".{f} = v.{f}, ");
@@ -1745,12 +1769,13 @@ mod tests {
         assert_eq!(m.fns.iter().map(|f| f.1.name.as_str()).collect::<Vec<_>>(), ["ok", "c_ctx", "c_std"]);
         assert_eq!(m.externs, [(vec![], "// Zig: pub extern fn c_side(x: i32) i32\nextern \"C\" fn c_side(x: i32) -> i32;\n".to_string())]);
         assert_eq!(m.left_out, ["c_naked (an extern fn with a calling convention a call can't use)", "z_auto (an extern fn with Zig's own calling convention: nothing can export one for it to link)", "c_len (an extern fn with a parameter of a type C doesn't have)"]);
-        assert_eq!(odd_int("u24"), Some("u32"));
-        assert_eq!(odd_int("u0"), None);
+        assert_eq!(odd_exact("u24"), Some("u24"));
+        assert_eq!((odd_store("u24"), odd_store("i100"), odd_store("u32")), ("u32", "i128", "u32"));
+        assert_eq!((odd_exact("u0"), odd_exact("u32"), odd_exact("u07")), (None, None, None));
         assert_eq!(ty("c_longlong"), Some(Ty::Prim("i64")));
         assert_eq!(ty("c_long"), Some(Ty::Prim(if cfg!(windows) { "i32" } else { "i64" })));
-        assert_eq!(odd_int("i1"), Some("i8"));
-        assert_eq!(odd_int("u65"), None);
+        assert_eq!((odd_store("i1"), odd_store("u65")), ("i8", "u128"));
+        assert_eq!(odd_exact("u129"), None);
     }
 
     #[test]
