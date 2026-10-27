@@ -139,13 +139,22 @@ fn libclang_view(cxx: bool) -> std::vec<std::string> {
 // headers are libclang's to give), the defaults off. Empty when the compiler doesn't answer
 fn compiler_view(cxx: bool) -> std::vec<std::string> {
     var view: std::vec<std::string> = {};
-    var argv: std::vec<str> = {};
+    // the compiler's library directories even when it's told to leave them out (-nostdinc++): libclang
+    // reads a header with a probe that includes the C++ library, as with its own directories on other
+    // systems; the wrappers still compile with the compiler as it's given
+    var given: std::vec<str> = {};
     var lang = "c";
     if (cxx) {
-        cxx_command(&argv);
+        cxx_command(&given);
         lang = "c++";
     } else {
-        c_command(&argv);
+        c_command(&given);
+    }
+    var argv: std::vec<str> = {};
+    for (a&) in given.items() {
+        if (!(*a == "-nostdinc++" || *a == "-nostdinc")) {
+            put(&argv, *a);
+        }
     }
     var ask = copy argv;
     put(&ask, "-dumpmachine");

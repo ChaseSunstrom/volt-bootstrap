@@ -2722,7 +2722,12 @@ fn cpp_freestanding() {
     // nothing (they check what the build has), and every kind of call still works; hosted too
     let e = Env::new("cpp-freestanding");
     let want = "add 11 22\ncounter 9 live 1\nlive 0\ntwice 42 3\ncode 3\napply 5 41\n";
-    for cxx in ["c++", "c++ -nostdinc++ -fno-exceptions", "c++ -fno-exceptions", "c++ -nostdinc++"] {
+    let mut cxxs = vec!["c++", "c++ -nostdinc++ -fno-exceptions", "c++ -fno-exceptions", "c++ -nostdinc++"];
+    // clang too where c++ is gcc: it's stricter about the wrappers' declarations (macOS's c++ is clang)
+    if Command::new("clang++").arg("--version").output().is_ok_and(|o| o.status.success()) {
+        cxxs.push("clang++ -nostdinc++ -fno-exceptions");
+    }
+    for cxx in cxxs {
         for backend in ["c", "llvm"] {
             assert_eq!(ok(e.voltc_cxx(&["run", "cpp_freestanding.volt", "--backend", backend], Some(cxx)), "voltc run cpp_freestanding.volt"), want, "C++ without std or exceptions ({cxx}, {backend})");
         }
